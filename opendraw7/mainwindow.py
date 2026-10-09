@@ -100,6 +100,7 @@ class MainWindow(QWidget):
                                 Qt.WindowMinMaxButtonsHint)
         self.setWindowIcon(icons.app_icon())
         self.setMouseTracking(True)
+        self.setAcceptDrops(True)
         self.settings = QSettings("OpenDraw7", "OpenDraw7")
         self.state = PaintState(self)
         self.doc = Document(DEFAULT_W, DEFAULT_H, self)
@@ -347,7 +348,7 @@ class MainWindow(QWidget):
         st = self.state
         page = RPage()
         g, self.paste_btn, self.cut_btn, self.copy_btn = self._clipboard_group()
-        page.add_group(g)
+        g_clip = page.add_group(g, "paste32")
 
         # -- Image
         g = RGroup("Image")
@@ -369,7 +370,7 @@ class MainWindow(QWidget):
         self.crop_btn.clicked.connect(self.canvas.crop)
         self.resize_btn.clicked.connect(self.resize_skew)
         self.rotate_btn.set_menu(self._rotate_menu)
-        page.add_group(g)
+        g_image = page.add_group(g, "select32")
 
         # -- Tools
         g = RGroup("Tools")
@@ -388,7 +389,7 @@ class MainWindow(QWidget):
             g.add(b, (i % 3) * 23, (i // 3) * 23)
             b.clicked.connect(lambda t=tid: st.set_tool(t))
             self.tool_btns[tid] = b
-        page.add_group(g)
+        g_tools = page.add_group(g, "tools32")
 
         # -- Brushes
         g = RGroup("")
@@ -413,7 +414,7 @@ class MainWindow(QWidget):
         self.gallery.picked.connect(lambda sid: st.set_tool("shape", shape=sid))
         self.outline_btn.set_menu(lambda: self._style_menu("outline"))
         self.fill_btn.set_menu(lambda: self._style_menu("fill"))
-        page.add_group(g)
+        g_shapes = page.add_group(g, "shapes32")
 
         # -- Size
         g = RGroup("")
@@ -423,7 +424,8 @@ class MainWindow(QWidget):
         self.size_btn.set_menu(self._size_menu)
         page.add_group(g)
 
-        page.add_group(self._colors_group())
+        g_colors = page.add_group(self._colors_group(), "editcolors32")
+        page.set_collapse_order([g_shapes, g_colors, g_image, g_tools, g_clip])
         self.home_page = page
         self.home_idx = self.ribbon.add_page("Home", page)
 
@@ -530,7 +532,7 @@ class MainWindow(QWidget):
         st = self.state
         page = RPage()
         g, self.t_paste, self.t_cut, self.t_copy = self._clipboard_group()
-        page.add_group(g)
+        t_clip = page.add_group(g, "paste32")
 
         g = RGroup("Font")
         self.font_combo = QFontComboBox()
@@ -565,7 +567,7 @@ class MainWindow(QWidget):
         self.size_combo.currentTextChanged.connect(self._font_size_picked)
         self.size_combo.activated.connect(lambda _i: self.canvas.setFocus())
         self.font_combo.activated.connect(lambda _i: self.canvas.setFocus())
-        page.add_group(g)
+        t_font = page.add_group(g, "font32")
 
         g = RGroup("Background")
         self.opaque_btn = RButton("Opaque", "opaque", "small", checkable=True, tip=tip_html(
@@ -576,9 +578,10 @@ class MainWindow(QWidget):
         g.add(self.transp_btn, 0, 10 + T.ROW_H)
         self.opaque_btn.clicked.connect(lambda: st.set_text_opaque(True))
         self.transp_btn.clicked.connect(lambda: st.set_text_opaque(False))
-        page.add_group(g)
+        t_bg = page.add_group(g, "opaque")
 
-        page.add_group(self._colors_group())
+        t_colors = page.add_group(self._colors_group(), "editcolors32")
+        page.set_collapse_order([t_colors, t_font, t_bg, t_clip])
         self._font_sync = False
         self.text_idx = self.ribbon.add_page("Text", page, contextual=True, visible=False)
 
@@ -1064,6 +1067,18 @@ class MainWindow(QWidget):
         fn = handlers.get(action)
         if fn:
             fn()
+
+    def dragEnterEvent(self, e):
+        if e.mimeData().hasUrls() and any(u.isLocalFile() for u in e.mimeData().urls()):
+            e.acceptProposedAction()
+
+    def dropEvent(self, e):
+        for u in e.mimeData().urls():
+            if u.isLocalFile():
+                e.acceptProposedAction()
+                if self.maybe_save():
+                    self.open_path(u.toLocalFile())
+                return
 
     def closeEvent(self, e):
         if self.maybe_save():

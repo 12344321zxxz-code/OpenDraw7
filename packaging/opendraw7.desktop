@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=OpenDraw7
+GenericName=Paint
+Comment=Paint program in the style of the one from Windows 7
+Exec=@EXEC@ %f
+Icon=opendraw7
+Terminal=false
+Categories=Graphics;2DGraphics;RasterGraphics;
+MimeType=image/png;image/jpeg;image/bmp;image/gif;image/tiff;
+StartupWMClass=opendraw7

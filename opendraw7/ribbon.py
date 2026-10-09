@@ -453,28 +453,119 @@ class RGroup(QWidget):
         p.end()
 
 
+class GroupPopup(QWidget):
+    """Shows a collapsed group's contents under its stand-in button."""
+    closed = Signal()
+
+    def __init__(self, group, page):
+        super().__init__(page.window(), Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
+        self.group = group
+        self.page = page
+        self.setFixedSize(group.width() + 4, T.PANEL_H + 2)
+        group.setParent(self)
+        group.move(2, 1)
+        group.show()
+        self._buttons = [b for b in group.findChildren(RButton) if not (b.dropdown or b.split)]
+        for b in self._buttons:
+            b.clicked.connect(self.close)
+        self._galleries = group.findChildren(ShapeGallery)
+        for gal in self._galleries:
+            gal.picked.connect(self._picked)
+
+    def _picked(self, _sid):
+        self.close()
+
+    def hideEvent(self, e):
+        for b in self._buttons:
+            try:
+                b.clicked.disconnect(self.close)
+            except (RuntimeError, TypeError):
+                pass
+        for gal in self._galleries:
+            try:
+                gal.picked.disconnect(self._picked)
+            except (RuntimeError, TypeError):
+                pass
+        self._buttons = []
+        self._galleries = []
+        self.group.hide()
+        self.group.setParent(self.page)
+        self.closed.emit()
+        super().hideEvent(e)
+        QTimer.singleShot(0, self.deleteLater)
+
+    def paintEvent(self, e):
+        p = QPainter(self)
+        r = self.rect()
+        p.fillRect(r, T.panel_brush(r))
+        p.setPen(QPen(T.MENU_BORDER, 1))
+        p.drawRect(0, 0, r.width() - 1, r.height() - 1)
+        p.end()
+
+
 class RPage(QWidget):
-    """One tab's panel: a row of groups on the gradient background."""
+    """One tab's panel: a row of groups on the gradient background.
+
+    When the window is too narrow, groups collapse one by one into a single
+    drop-down button, in the order given to set_collapse_order().
+    """
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.groups = []
+        self._order = []
+        self._stubs = {}
+        self._seps = []
         self.setFixedHeight(T.PANEL_H)
 
-    def add_group(self, g: RGroup):
+    def add_group(self, g: RGroup, stub_icon=None, stub_text=None):
         g.setParent(self)
         self.groups.append(g)
+        if stub_icon:
+            stub = RButton(stub_text or g.title, stub_icon, "large", dropdown=True, parent=self)
+            stub.hide()
+            stub.set_menu(lambda g=g: GroupPopup(g, self))
+            self._stubs[g] = stub
         self.relayout()
         return g
 
+    def set_collapse_order(self, groups):
+        self._order = [g for g in groups if g in self._stubs]
+        self.relayout()
+
+    def natural_width(self):
+        return sum(g.width() for g in self.groups) + 4
+
     def relayout(self):
+        avail = self.width()
+        collapsed = set()
+        for g in self._order:
+            total = 4 + sum((self._stubs[x].width() + 10) if x in collapsed else x.width() for x in self.groups)
+            if total <= avail:
+                break
+            collapsed.add(g)
         x = 2
+        self._seps = []
         for g in self.groups:
-            if g.isHidden() and g.property("gone"):
-                continue
-            g.move(x, 0)
-            x += g.width()
-        self.setMinimumWidth(x + 2)
+            stub = self._stubs.get(g)
+            if g in collapsed:
+                if g.parent() is self:
+                    g.hide()
+                stub.move(x + 4, T.CONTENT_TOP)
+                stub.show()
+                x += stub.width() + 10
+                self._seps.append(x - 2)
+            else:
+                if stub is not None:
+                    stub.hide()
+                if g.parent() is self:
+                    g.move(x, 0)
+                    g.show()
+                x += g.width()
+        self.update()
+
+    def resizeEvent(self, e):
+        self.relayout()
 
     def paintEvent(self, e):
         p = QPainter(self)
@@ -484,6 +575,11 @@ class RPage(QWidget):
         p.drawLine(0, r.height() - 2, r.width(), r.height() - 2)
         p.setPen(QPen(T.PANEL_SHADOW, 1))
         p.drawLine(0, r.height() - 1, r.width(), r.height() - 1)
+        for x in self._seps:
+            p.setPen(QPen(T.GROUP_SEP_DARK, 1))
+            p.drawLine(x, 4, x, T.PANEL_H - 7)
+            p.setPen(QPen(T.GROUP_SEP_LIGHT, 1))
+            p.drawLine(x + 1, 4, x + 1, T.PANEL_H - 7)
         p.end()
 
 

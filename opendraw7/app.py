@@ -63,6 +63,10 @@ def main(argv=None):
     parser.add_argument("--version", action="version", version=f"{APP_NAME} {__version__}")
     args, qt_args = parser.parse_known_args(argv[1:])
     sys.excepthook = _excepthook
+    if sys.platform.startswith("linux") and "QT_QPA_PLATFORM" not in os.environ:
+        # Prefer X11 (XWayland on Wayland desktops), where the custom title bar is tested;
+        # fall back to native Wayland if X11 is not available.
+        os.environ["QT_QPA_PLATFORM"] = "xcb;wayland"
     app = create_app([argv[0]] + qt_args)
     from .mainwindow import MainWindow
     native = args.native_frame or os.environ.get("OPENDRAW7_NATIVE_FRAME") == "1"

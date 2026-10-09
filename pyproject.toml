@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "opendraw7"
+version = "0.1.0"
+description = "Open-source paint program in the style of the one from Windows 7"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+dependencies = ["PySide6-Essentials>=6.5", "numpy>=1.22"]
+
+[project.gui-scripts]
+opendraw7 = "opendraw7.app:main"
+
+[tool.setuptools]
+packages = ["opendraw7"]

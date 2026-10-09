@@ -263,6 +263,8 @@ def save_image(img: QImage, path: str, fmt: str) -> None:
     w = QImageWriter(path, qfmt.encode())
     if fmt == "jpeg":
         w.setQuality(92)
+    elif fmt == "tiff":
+        w.setCompression(1)        # LZW
     out = img.convertToFormat(QImage.Format_RGB888) if fmt != "png" else img
     out.setDotsPerMeterX(3780)
     out.setDotsPerMeterY(3780)

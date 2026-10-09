@@ -823,6 +823,32 @@ def _(p):
     p.drawPolygon(poly(14.1, -2.8, 31.0, -1.5, 32.2, 0, 31.0, 1.5, 14.1, 2.8))
 
 
+@icon_fn("shapes32", 32)
+def _(p):
+    p.setPen(pen("#2b4e8c", 1.3, join=Qt.MiterJoin))
+    p.setBrush(lg(0, 4, 0, 18, (0, "#ffffff"), (1, "#bcd8f6")))
+    p.drawEllipse(QRectF(3.5, 4.5, 15, 13))
+    p.setBrush(lg(0, 12, 0, 28, (0, "#fff6c4"), (1, "#f2c94c")))
+    p.drawRect(QRectF(13.5, 13.5, 15, 13))
+    p.setBrush(lg(0, 16, 0, 29, (0, "#d9f2c9"), (1, "#7cc56a")))
+    p.drawPolygon(poly(2.5, 28.5, 9.5, 16.5, 16.5, 28.5))
+
+
+@icon_fn("tools32", 32)
+def _(p):
+    p.save()
+    p.translate(4, 28)
+    p.rotate(-45)
+    p.scale(1.9, 1.9)
+    _pencil(p)
+    p.restore()
+
+
+@icon_fn("font32", 32)
+def _(p):
+    _letter(p, "A", QRectF(5, 4, 22, 24))
+
+
 @icon_fn("size32", 32)
 def _(p):
     crisp(p)

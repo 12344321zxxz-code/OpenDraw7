@@ -8,7 +8,7 @@ from . import icons
 from .ribbon import Popup
 
 ITEM_H = 42
-LEFT_W = 214
+LEFT_W = 240
 RIGHT_W = 300
 TOP = 26
 SUB_H = 54
@@ -165,6 +165,7 @@ class AppMenu(Popup):
         for i in range(3):
             p.fillRect(gx + 2, gy + 4 + i * 2, 10, 1, QColor(120, 160, 220))
         T.draw_arrow(p, gx + 22, gy + 6, QColor(255, 255, 255))
+        p.setBrush(Qt.NoBrush)
         # left pane
         left = QRect(2, TOP + 2, LEFT_W - 1, r.height() - TOP - 5)
         p.fillRect(left, QColor(251, 252, 253))

@@ -64,13 +64,13 @@ def _unit_path(name):
         p.addPolygon(QPolygonF([QPointF(x, y) for x, y in _POLYS[name]]))
         p.closeSubpath()
     elif name == "heart":
-        p.moveTo(0.5, 0.25)
-        p.cubicTo(0.5, 0.08, 0.36, 0.0, 0.25, 0.0)
+        p.moveTo(0.5, 0.22)
+        p.cubicTo(0.44, 0.06, 0.34, 0.0, 0.25, 0.0)
         p.cubicTo(0.1, 0.0, 0.0, 0.12, 0.0, 0.3)
         p.cubicTo(0.0, 0.58, 0.3, 0.76, 0.5, 1.0)
         p.cubicTo(0.7, 0.76, 1.0, 0.58, 1.0, 0.3)
         p.cubicTo(1.0, 0.12, 0.9, 0.0, 0.75, 0.0)
-        p.cubicTo(0.64, 0.0, 0.5, 0.08, 0.5, 0.25)
+        p.cubicTo(0.66, 0.0, 0.56, 0.06, 0.5, 0.22)
         p.closeSubpath()
     elif name == "callout_oval":
         # boolean ops flatten curves with a fixed tolerance, so work at a large scale

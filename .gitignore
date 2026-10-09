@@ -5,3 +5,4 @@ dist/
 .venv/
 *.spec.bak
 /out/
+packaging/vendor/
