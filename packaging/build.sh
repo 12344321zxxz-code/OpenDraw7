@@ -42,6 +42,8 @@ cp "$here/install.sh" "$here/uninstall.sh" "$here/opendraw7.desktop" "$stage/"
 cp "$root/LICENSE" "$stage/LICENSE.txt"
 cp "$here/README-package.txt" "$stage/README.txt"
 chmod +x "$stage/install.sh" "$stage/uninstall.sh" "$stage/opendraw7"
+# The packaged program must pass its own checks before it is archived.
+env -u QT_QPA_PLATFORM "$stage/opendraw7" --self-test
 tarball="$out/OpenDraw7-$version-linux-x86_64.tar.gz"
 tar -C "$out" -czf "$tarball" OpenDraw7
 ls -la "$tarball"

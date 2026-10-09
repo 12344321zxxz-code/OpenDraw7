@@ -113,21 +113,23 @@ def render_shape(p: QPainter, path: QPainterPath, width: int, outline_style: str
                  fill_style: str, fill_color: QColor, closed=True, crisp=False, round_join=False):
     """Draw a gallery shape with the chosen outline and fill styles."""
     p.save()
-    p.setRenderHint(QPainter.Antialiasing, not crisp)
-    p.setBrushOrigin(0, 0)
-    if closed and fill_style != "none":
-        p.setPen(Qt.NoPen)
-        p.setBrush(style_brush(fill_style, fill_color))
-        p.drawPath(path)
-    if outline_style != "none":
-        pen = QPen(style_brush(outline_style, outline_color), width)
-        pen.setJoinStyle(Qt.MiterJoin if (closed and not round_join) else Qt.RoundJoin)
-        pen.setMiterLimit(6)
-        pen.setCapStyle(Qt.RoundCap if not closed else Qt.SquareCap)
-        p.setPen(pen)
-        p.setBrush(Qt.NoBrush)
-        p.drawPath(path)
-    p.restore()
+    try:
+        p.setRenderHint(QPainter.Antialiasing, not crisp)
+        p.setBrushOrigin(0, 0)
+        if closed and fill_style != "none":
+            p.setPen(Qt.NoPen)
+            p.setBrush(style_brush(fill_style, fill_color))
+            p.drawPath(path)
+        if outline_style != "none":
+            pen = QPen(style_brush(outline_style, outline_color), width)
+            pen.setJoinStyle(Qt.MiterJoin if (closed and not round_join) else Qt.RoundJoin)
+            pen.setMiterLimit(6)
+            pen.setCapStyle(Qt.RoundCap if not closed else Qt.SquareCap)
+            p.setPen(pen)
+            p.setBrush(Qt.NoBrush)
+            p.drawPath(path)
+    finally:
+        p.restore()
 
 
 # ------------------------------------------------------------------ strokes --

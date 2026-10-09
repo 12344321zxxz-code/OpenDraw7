@@ -1,5 +1,6 @@
 """The scrolling work area: draws the picture and routes input to the tools."""
 import math
+import traceback
 from PySide6.QtCore import Qt, QPoint, QPointF, QRect, QRectF, QSize, Signal, QEvent
 from PySide6.QtGui import (QImage, QPainter, QColor, QPen, QCursor, QTransform, QGuiApplication)
 from PySide6.QtWidgets import QAbstractScrollArea, QFrame
@@ -80,7 +81,12 @@ class Canvas(QAbstractScrollArea):
             self.viewport().update()
 
     def commit_pending(self):
-        self.tool.commit()
+        try:
+            self.tool.commit()
+        except Exception:
+            traceback.print_exc()
+            self._drop_pending()
+            self.invalidate()
 
     def has_selection(self):
         return self.tool is self.select_tool and self.select_tool.sel is not None
@@ -125,9 +131,21 @@ class Canvas(QAbstractScrollArea):
     # -- display -------------------------------------------------------------
     def display_image(self) -> QImage:
         if self._display is None:
-            comp = self.tool.composite()
+            try:
+                comp = self.tool.composite()
+            except Exception:
+                traceback.print_exc()
+                comp = None
+                self._drop_pending()
             self._display = comp if comp is not None else self.doc.image
         return self._display
+
+    def _drop_pending(self):
+        """Throw away whatever the tool has in progress after it failed."""
+        try:
+            self.tool.cancel()
+        except Exception:
+            traceback.print_exc()
 
     def invalidate(self):
         self._display = None
@@ -190,9 +208,18 @@ class Canvas(QAbstractScrollArea):
 
     # -- painting ------------------------------------------------------------
     def paintEvent(self, e):
-        p = QPainter(self.viewport())
-        p.fillRect(e.rect(), T.WORKSPACE)
         img = self.display_image()
+        p = QPainter(self.viewport())
+        try:
+            self._paint(p, e, img)
+        except Exception:
+            traceback.print_exc()
+            self._drop_pending()
+        finally:
+            p.end()
+
+    def _paint(self, p, e, img):
+        p.fillRect(e.rect(), T.WORKSPACE)
         o = self.origin()
         z = self.zoom
         w, h = img.width(), img.height()
@@ -214,7 +241,11 @@ class Canvas(QAbstractScrollArea):
             p.drawLine(full.left() + 2, full.bottom() + 1 + i, full.right() + i, full.bottom() + 1 + i)
         if self.show_grid:
             self._paint_grid(p, full, vis)
-        self.tool.paint(p)
+        p.save()
+        try:
+            self.tool.paint(p)
+        finally:
+            p.restore()
         if not self.tool.has_pending():
             p.setPen(QPen(QColor(85, 85, 85), 1))
             p.setBrush(QColor(255, 255, 255))
@@ -227,7 +258,6 @@ class Canvas(QAbstractScrollArea):
             p.setPen(pen)
             p.setBrush(Qt.NoBrush)
             p.drawRect(o.x(), o.y(), int(round(s.width() * z)), int(round(s.height() * z)))
-        p.end()
 
     def _paint_grid(self, p, full, vis):
         if vis.isEmpty():

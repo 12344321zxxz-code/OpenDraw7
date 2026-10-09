@@ -60,14 +60,23 @@ def main(argv=None):
     parser.add_argument("file", nargs="?", help="picture to open")
     parser.add_argument("--native-frame", action="store_true",
                         help="use the desktop's own title bar instead of the built-in one")
+    parser.add_argument("--self-test", action="store_true",
+                        help="run the built-in checks without showing a window, then exit")
     parser.add_argument("--version", action="version", version=f"{APP_NAME} {__version__}")
     args, qt_args = parser.parse_known_args(argv[1:])
     sys.excepthook = _excepthook
+    if args.self_test:
+        os.environ["QT_QPA_PLATFORM"] = "offscreen"
     if sys.platform.startswith("linux") and "QT_QPA_PLATFORM" not in os.environ:
         # Prefer X11 (XWayland on Wayland desktops), where the custom title bar is tested;
         # fall back to native Wayland if X11 is not available.
         os.environ["QT_QPA_PLATFORM"] = "xcb;wayland"
     app = create_app([argv[0]] + qt_args)
+    from . import icons
+    app.setWindowIcon(icons.app_icon())
+    if args.self_test:
+        from .selftest import run
+        return run(app)
     from .mainwindow import MainWindow
     native = args.native_frame or os.environ.get("OPENDRAW7_NATIVE_FRAME") == "1"
     win = MainWindow(native_frame=native)

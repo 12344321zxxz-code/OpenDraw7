@@ -191,7 +191,12 @@ class RButton(QWidget):
         super().changeEvent(e)
 
     def _open_menu(self):
-        m = self.menu_factory()
+        try:
+            m = self.menu_factory()
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            m = None
         if m is None:
             self._down = None
             self.update()

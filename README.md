@@ -105,6 +105,7 @@ installs.
 
 ```sh
 QT_QPA_PLATFORM=offscreen python tests/smoke_test.py
+python run.py --self-test        # also works on a packaged build: ./opendraw7 --self-test
 ```
 
 ## Layout

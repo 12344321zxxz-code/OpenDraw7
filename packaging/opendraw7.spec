@@ -4,8 +4,9 @@ import os
 ROOT = os.path.abspath(os.path.join(SPECPATH, ".."))
 
 EXCLUDES = [
-    "tkinter", "unittest", "pydoc", "doctest", "sqlite3", "lib2to3", "xmlrpc", "multiprocessing",
-    "asyncio", "curses", "distutils", "setuptools", "pkg_resources", "email", "http", "html",
+    # Only big, clearly unused parts of the standard library. Do not add small modules here:
+    # leaving out "secrets" broke numpy.random (and with it every textured brush) in 0.1.0.
+    "tkinter", "sqlite3", "lib2to3", "curses", "distutils", "setuptools", "pkg_resources",
     "PySide6.QtNetwork", "PySide6.QtQml", "PySide6.QtQuick", "PySide6.QtSvg", "PySide6.QtPdf",
     "PySide6.QtOpenGL", "PySide6.QtOpenGLWidgets", "PySide6.QtSql", "PySide6.QtXml", "PySide6.QtTest",
     "PySide6.QtConcurrent", "PySide6.QtHelp", "PySide6.QtDesigner", "PySide6.QtUiTools",
@@ -17,7 +18,7 @@ a = Analysis(
     pathex=[ROOT],
     binaries=[],
     datas=[],
-    hiddenimports=[],
+    hiddenimports=["secrets", "numpy.random"],
     hookspath=[],
     excludes=EXCLUDES,
     noarchive=False,

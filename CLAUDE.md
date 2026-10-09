@@ -15,6 +15,8 @@ packaging/build.sh                                        # dist/OpenDraw7-<ver>
 ```
 
 Run the smoke test after any change. Look at a screenshot after any visual change.
+`opendraw7 --self-test` runs checks inside the program itself; `packaging/build.sh` runs it on the
+packaged build and refuses to archive a build that fails.
 
 ## How it is put together
 
@@ -35,6 +37,12 @@ Run the smoke test after any change. Look at a screenshot after any visual chang
   the click that opened it and closed itself. `Popup.takes_release()` guards this. For real input:
   `Xvfb :77` + `openbox` + `xdotool` + ImageMagick `import -window root shot.png` (apt has all of
   them). Give xdotool ~0.3 s between steps or window moves and drags misfire.
+- **Test the packaged build, not just the source.** 0.1.0 shipped without the stdlib module
+  `secrets`, which `numpy.random` imports from compiled code where PyInstaller cannot see it. Every
+  textured brush and shape style failed on the user's machine while all source tests passed. The
+  spec now lists it as a hidden import and `--self-test` exists to catch the next one.
+- A tool that raises inside `paintEvent` used to blank the canvas for good. `Canvas` now catches
+  tool failures, drops the in-progress object and keeps painting. Keep it that way.
 - Do not `pkill -f` a pattern that appears in your own command line; it kills the shell.
 - `QPainterPath.united()` flattens curves with an absolute tolerance. Build boolean shapes at a
   large scale and scale down (see the callouts in `shapes.py`).

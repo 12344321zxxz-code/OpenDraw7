@@ -15,7 +15,10 @@ rm -rf "$dest"
 mkdir -p "$dest" "$apps" "$icons" "$bin"
 cp -R "$here/opendraw7" "$here/_internal" "$dest/"
 cp "$here/opendraw7.png" "$icons/opendraw7.png"
-sed "s|@EXEC@|\"$dest/opendraw7\"|" "$here/opendraw7.desktop" > "$apps/opendraw7.desktop"
+cp "$here/opendraw7.png" "$dest/opendraw7.png"
+# An absolute icon path works even when the desktop has not refreshed its icon cache.
+sed -e "s|@EXEC@|\"$dest/opendraw7\"|" -e "s|^Icon=.*|Icon=$dest/opendraw7.png|" \
+    "$here/opendraw7.desktop" > "$apps/opendraw7.desktop"
 ln -sf "$dest/opendraw7" "$bin/opendraw7"
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$apps" >/dev/null 2>&1 || true
 command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -q "${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor" >/dev/null 2>&1 || true

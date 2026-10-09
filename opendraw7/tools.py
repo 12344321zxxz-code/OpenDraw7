@@ -717,8 +717,10 @@ class ShapeBase(Tool):
         outline = st.outline
         if not closed and outline == "none":
             outline = "solid"
-        render_shape(p, path, st.sizes["shape"], outline, oc, st.fill, fc, closed, round_join=round_join)
-        p.end()
+        try:
+            render_shape(p, path, st.sizes["shape"], outline, oc, st.fill, fc, closed, round_join=round_join)
+        finally:
+            p.end()
 
     def style_changed(self, what):
         if self.has_pending():
