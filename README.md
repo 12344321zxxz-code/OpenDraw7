@@ -3,6 +3,8 @@
 An open-source paint program for Linux that looks and works like the Paint that shipped with
 Windows 7: the same ribbon, the same tools, the same shortcuts.
 
+![OpenDraw7 main window](docs/screenshot.png)
+
 All code and artwork here are original. OpenDraw7 is not affiliated with or endorsed by Microsoft.
 
 ## Get it

@@ -104,11 +104,16 @@ class AppMenu(Popup):
         self._hover = None
         self.update()
 
-    def mouseReleaseEvent(self, e):
+    def mousePressEvent(self, e):
         pos = e.position().toPoint()
+        self._armed = True
         if not self.rect().contains(pos) or pos.y() < TOP:
             self.close()
+
+    def mouseReleaseEvent(self, e):
+        if not self.takes_release():
             return
+        pos = e.position().toPoint()
         h = self._hit(pos)
         if not h:
             return

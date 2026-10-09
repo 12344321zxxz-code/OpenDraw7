@@ -23,15 +23,23 @@ def has(name):
     return name in _drawers
 
 
-def image(name, size=None, enabled=True) -> QImage:
+def dpr() -> float:
+    """Device pixel ratio to draw icons at (so they stay sharp on scaled displays)."""
+    from PySide6.QtGui import QGuiApplication
+    app = QGuiApplication.instance()
+    return float(app.devicePixelRatio()) if app is not None else 1.0
+
+
+def image(name, size=None, enabled=True, scale=1.0) -> QImage:
     grid, fn = _drawers[name]
     size = size or grid
-    img = QImage(size, size, QImage.Format_ARGB32_Premultiplied)
+    px = max(1, int(round(size * scale)))
+    img = QImage(px, px, QImage.Format_ARGB32_Premultiplied)
     img.fill(0)
     p = QPainter(img)
     p.setRenderHint(QPainter.Antialiasing, True)
     p.setRenderHint(QPainter.TextAntialiasing, True)
-    p.scale(size / grid, size / grid)
+    p.scale(px / grid, px / grid)
     fn(p)
     p.end()
     if not enabled:
@@ -40,10 +48,12 @@ def image(name, size=None, enabled=True) -> QImage:
 
 
 def pixmap(name, size=None, enabled=True) -> QPixmap:
-    key = (name, size, enabled)
+    k = dpr()
+    key = (name, size, enabled, k)
     pm = _cache.get(key)
     if pm is None:
-        pm = QPixmap.fromImage(image(name, size, enabled))
+        pm = QPixmap.fromImage(image(name, size, enabled, k))
+        pm.setDevicePixelRatio(k)
         _cache[key] = pm
     return pm
 
@@ -1102,13 +1112,15 @@ def app_icon() -> QIcon:
 
 # ------------------------------------------------------- shape glyph icons --
 def shape_glyph(name, size=16, color="#34465e") -> QPixmap:
-    key = ("shape", name, size, color)
+    k = dpr()
+    key = ("shape", name, size, color, k)
     pm = _cache.get(key)
     if pm is not None:
         return pm
-    img = QImage(size, size, QImage.Format_ARGB32_Premultiplied)
+    img = QImage(int(round(size * k)), int(round(size * k)), QImage.Format_ARGB32_Premultiplied)
     img.fill(0)
     p = QPainter(img)
+    p.scale(k, k)
     p.setRenderHint(QPainter.Antialiasing, True)
     p.setPen(pen(color, 1.0, join=Qt.MiterJoin))
     p.setBrush(Qt.NoBrush)
@@ -1132,6 +1144,7 @@ def shape_glyph(name, size=16, color="#34465e") -> QPixmap:
         p.drawPath(shape_path(name, r))
     p.end()
     pm = QPixmap.fromImage(img)
+    pm.setDevicePixelRatio(k)
     _cache[key] = pm
     return pm
 

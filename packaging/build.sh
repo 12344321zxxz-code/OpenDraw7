@@ -15,7 +15,6 @@ rm -rf "$work" "$out/opendraw7" "$out/OpenDraw7"
 
 stage="$out/OpenDraw7"
 mv "$out/opendraw7" "$stage"
-rm -f "$stage"/_internal/libQt6EglFS* "$stage"/_internal/PySide6/Qt/lib/libQt6EglFS* "$stage"/_internal/libQt6EglFsKms* "$stage"/_internal/PySide6/Qt/lib/libQt6EglFsKms*
 QT_QPA_PLATFORM=offscreen "$PYTHON" - "$root" "$stage/opendraw7.png" <<'PY'
 import sys
 sys.path.insert(0, sys.argv[1])

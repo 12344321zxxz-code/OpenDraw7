@@ -29,7 +29,9 @@ DROP_PARTS = (
     "libQt6Network", "libQt6OpenGL", "libQt6Sql", "/tls/", "/networkinformation/", "/sqldrivers/",
     "/qmltooling/", "/designer/", "libQt6VirtualKeyboard", "/platforminputcontexts/libqtvirtualkeyboard",
     "libQt6WaylandCompositor", "libQt6WaylandEglCompositor", "/wayland-graphics-integration-server/",
-    "/egldeviceintegrations/", "/vectorimageformats/", "/generic/",
+    "/egldeviceintegrations/", "/vectorimageformats/", "/generic/", "libQt6EglFS", "libQt6EglFsKms",
+    # the GTK theme plugin would restyle dialogs from the desktop theme; keep the look fixed
+    "libqgtk3",
 )
 
 

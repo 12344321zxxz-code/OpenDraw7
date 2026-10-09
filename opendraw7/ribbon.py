@@ -859,6 +859,24 @@ class Popup(QWidget):
         self.setMouseTracking(True)
         self.setFont(T.ui_font())
         self.setAttribute(Qt.WA_DeleteOnClose, True)
+        self._armed = False
+        self._show_pos = None
+
+    def showEvent(self, e):
+        self._armed = False
+        self._show_pos = QCursor.pos()
+        super().showEvent(e)
+
+    def mousePressEvent(self, e):
+        self._armed = True
+        if not self.rect().contains(e.position().toPoint()):
+            self.close()
+
+    def takes_release(self):
+        """False for the release of the very click that opened the popup."""
+        if self._armed:
+            return True
+        return self._show_pos is None or (QCursor.pos() - self._show_pos).manhattanLength() > 6
 
     def hideEvent(self, e):
         self.closed.emit()
@@ -907,11 +925,11 @@ class GridPopup(Popup):
             self.update()
 
     def mouseReleaseEvent(self, e):
+        if not self.takes_release():
+            return
         i = self._index(e.position().toPoint())
         if i >= 0:
             self.picked.emit(self.items[i][0])
-            self.close()
-        elif not self.rect().contains(e.position().toPoint()):
             self.close()
 
     def event(self, e):
@@ -933,7 +951,8 @@ class GridPopup(Popup):
                 T.draw_hot(p, r, "checked_hover" if i == self._hover else "checked")
             elif i == self._hover:
                 T.draw_hot(p, r, "hover")
-            p.drawPixmap(r.left() + (r.width() - pm.width()) // 2, r.top() + (r.height() - pm.height()) // 2, pm)
+            sz = pm.deviceIndependentSize()
+            p.drawPixmap(int(r.left() + (r.width() - sz.width()) / 2), int(r.top() + (r.height() - sz.height()) / 2), pm)
         p.end()
 
 
@@ -967,11 +986,11 @@ class SizePopup(Popup):
             self.update()
 
     def mouseReleaseEvent(self, e):
+        if not self.takes_release():
+            return
         i = self._index(e.position().toPoint())
         if i >= 0:
             self.picked.emit(self.sizes[i])
-            self.close()
-        elif not self.rect().contains(e.position().toPoint()):
             self.close()
 
     def event(self, e):

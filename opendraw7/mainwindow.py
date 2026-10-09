@@ -171,8 +171,13 @@ class MainWindow(QWidget):
         self.state.changed.connect(self._state_changed)
         QGuiApplication.clipboard().dataChanged.connect(self.refresh)
 
-        self.resize(1100, 760)
         self.setMinimumSize(520, 360)
+        scr = QGuiApplication.primaryScreen()
+        avail = scr.availableGeometry() if scr is not None else QRect(0, 0, 1280, 800)
+        w, h = min(1100, avail.width() - 40), min(760, avail.height() - 40)
+        self.resize(max(520, w), max(360, h))
+        self.move(avail.left() + max(0, (avail.width() - self.width()) // 2),
+                  avail.top() + max(0, (avail.height() - self.height()) // 2))
         self._doc_info()
         self.refresh()
         self.canvas.setFocus()
@@ -854,7 +859,8 @@ class MainWindow(QWidget):
         d = self.settings.value("dir", "")
         if d and os.path.isdir(d):
             return d
-        return QStandardPaths.writableLocation(QStandardPaths.PicturesLocation) or os.path.expanduser("~")
+        pics = QStandardPaths.writableLocation(QStandardPaths.PicturesLocation)
+        return pics if pics and os.path.isdir(pics) else os.path.expanduser("~")
 
     def maybe_save(self):
         """True if it is fine to discard the current picture."""
