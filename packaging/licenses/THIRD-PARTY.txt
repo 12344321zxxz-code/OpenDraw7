@@ -1,0 +1,27 @@
+OpenDraw7 itself is released under the MIT licence (see OpenDraw7-LICENSE).
+
+This package also contains the following software, each under its own licence:
+
+Qt 6 and PySide6 / Shiboken6 (Qt for Python)
+    Licence: GNU Lesser General Public License v3 (LGPL-3.0.txt, with GPL-3.0.txt for reference)
+    Copyright (C) The Qt Company Ltd. and other contributors
+    Source:  https://download.qt.io/official_releases/qt/  and  https://code.qt.io/cgit/pyside/pyside-setup.git
+    These libraries are shipped unmodified as separate shared libraries under _internal/PySide6
+    and _internal/shiboken6. You may replace them with your own builds of the same versions.
+    Qt bundles ICU (Unicode licence) and other components listed at https://doc.qt.io/qt-6/licenses-used-in-qt.html
+
+Python
+    Licence: Python Software Foundation License (Python-LICENSE.txt)
+    Source:  https://www.python.org/  (standalone build from https://github.com/astral-sh/python-build-standalone)
+
+NumPy, with OpenBLAS and the GCC runtime libraries it bundles
+    Licence: BSD 3-Clause and others (NumPy-LICENSE.txt)
+    Source:  https://github.com/numpy/numpy
+
+X11 helper libraries (xcb-util-cursor, xcb-util-wm, xcb-util-image, xcb-util-keysyms,
+xcb-util-renderutil, xcb-util, libxcb extensions, libxkbcommon-x11)
+    Licence: MIT/X11 (see the files in vendor/)
+    Source:  https://xcb.freedesktop.org/  and  https://xkbcommon.org/
+
+OpenDraw7 is not affiliated with or endorsed by Microsoft. "Windows" and "Microsoft" are
+trademarks of Microsoft Corporation and are used only to describe what this program imitates.

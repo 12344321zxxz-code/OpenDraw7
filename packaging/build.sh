@@ -23,6 +23,21 @@ app = QGuiApplication([])
 from opendraw7 import icons
 icons.image("app", 256).save(sys.argv[2])
 PY
+# third-party licence texts (the package redistributes Qt, PySide6, Python and NumPy)
+lic="$stage/_internal/licenses"
+mkdir -p "$lic"
+cp "$here"/licenses/*.txt "$lic/"
+"$PYTHON" - "$lic" <<'PY'
+import glob, os, shutil, sys, sysconfig
+out = sys.argv[1]
+std = os.path.join(sysconfig.get_paths()["stdlib"], "LICENSE.txt")
+if os.path.exists(std):
+    shutil.copy(std, os.path.join(out, "Python-LICENSE.txt"))
+import numpy
+hits = glob.glob(os.path.join(os.path.dirname(os.path.dirname(numpy.__file__)), "numpy-*.dist-info", "licenses", "LICENSE.txt"))
+if hits:
+    shutil.copy(hits[0], os.path.join(out, "NumPy-LICENSE.txt"))
+PY
 cp "$here/install.sh" "$here/uninstall.sh" "$here/opendraw7.desktop" "$stage/"
 cp "$root/LICENSE" "$stage/LICENSE.txt"
 cp "$here/README-package.txt" "$stage/README.txt"

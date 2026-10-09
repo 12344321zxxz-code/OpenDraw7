@@ -21,5 +21,8 @@ If the window buttons or dragging misbehave on your desktop, start it with
     ./opendraw7 --native-frame
 to use your desktop's own title bar instead of the built-in one.
 
+Licences of everything in this package are in _internal/licenses/
+(start with THIRD-PARTY.txt).
+
 Source code, licence and issue tracker:
     https://github.com/12344321zxxz-code/OpenDraw7
