@@ -9,8 +9,9 @@ All code and artwork here are original. OpenDraw7 is not affiliated with or endo
 
 ## Get it
 
-**Ready-made build (Linux, 64-bit Intel/AMD).** Download `OpenDraw7-<version>-linux-x86_64.tar.gz`
-from the Releases page, unpack it, then either run it in place or install it for your user:
+**Ready-made build (Linux, 64-bit Intel/AMD).** Take `OpenDraw7-<version>-linux-x86_64.tar.gz` from
+the Releases page if one has been published there, or build it yourself (see below). Unpack it, then
+either run it in place or install it for your user:
 
 ```sh
 tar -xzf OpenDraw7-*-linux-x86_64.tar.gz

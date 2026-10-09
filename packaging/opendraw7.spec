@@ -62,9 +62,7 @@ if os.path.isdir(os.path.join(VENDOR, "lib")):
         a.datas.append((os.path.join("licenses", "vendor", f), os.path.join(VENDOR, "licenses", f), "DATA"))
 else:
     print("WARNING: packaging/vendor missing - run packaging/fetch_vendor.sh first")
-for f in ("LICENSE", "README.md"):
-    a.datas.append((os.path.join("licenses" if f == "LICENSE" else ".", "OpenDraw7-" + f if f == "LICENSE" else f),
-                    os.path.join(ROOT, f), "DATA"))
+a.datas.append((os.path.join("licenses", "OpenDraw7-LICENSE"), os.path.join(ROOT, "LICENSE"), "DATA"))
 
 pyz = PYZ(a.pure)
 exe = EXE(
