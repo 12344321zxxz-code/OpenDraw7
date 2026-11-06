@@ -51,6 +51,13 @@ packaged build and refuses to archive a build that fails.
   (`packaging/fetch_vendor.sh`). Every other system library is deliberately *not* bundled: the
   build machine's copies need its newer glibc and would break older distros. The package's glibc
   floor is PySide6's (2.34 with PySide6 6.12). Check with `objdump -T` over the bundle.
+- numpy 2.5 wheels need glibc 2.38 and silently raise the package's floor. Build with
+  `numpy<2.5` (manylinux_2_28) unless the floor is meant to move.
+- Brush strokes and shape outlines are anti-aliased, so an exact-colour flood fill stopped at their
+  soft rim and left a pale ring. `flood_fill` now also recolours that rim (`_fill_soft_edge`): it
+  swaps only the background's share of each rim pixel and grows outwards only while pixels get
+  darker, so it cannot step across a thin line. It works on border pixels only; keep it that way,
+  a whole-area version took 14 s on a 4000x3000 picture.
 - The app sets `QT_QPA_PLATFORM=xcb;wayland` on Linux because the custom title bar was only tested
   on X11. Native Wayland is untested.
 

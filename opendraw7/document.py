@@ -64,7 +64,7 @@ def flatten(img: QImage, bg=QColor(255, 255, 255)) -> QImage:
 
 
 def flood_fill(img: QImage, x: int, y: int, color: QColor) -> bool:
-    """4-connected fill of the exact-colour region containing (x, y)."""
+    """4-connected fill of the exact-colour region containing (x, y), anti-aliased rim included."""
     if not (0 <= x < img.width() and 0 <= y < img.height()):
         return False
     new = np.uint32(0xFF000000 | (color.rgb() & 0xFFFFFF))
@@ -106,11 +106,116 @@ def flood_fill(img: QImage, x: int, y: int, color: QColor) -> bool:
                 if not nseen[j]:
                     nseen[j] = True
                     stack.append((ny, j))
+    mask = np.zeros((h, w), dtype=bool)
     for ry, (s, e, seen) in runs.items():
-        row = a[ry]
+        row = mask[ry]
         for j in np.flatnonzero(seen):
-            row[int(s[j]):int(e[j]) + 1] = new
+            row[int(s[j]):int(e[j]) + 1] = True
+    _fill_soft_edge(a, mask, target, new)
+    a[mask] = new
     return True
+
+
+EDGE_REACH = 2      # how far past the filled area anti-aliased edge pixels are looked for
+EDGE_SEARCH = 3     # radius of the window searched for the edge's solid colour
+
+
+def _rgb(v):
+    v = np.asarray(v, dtype=np.uint32)
+    return np.stack([(v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF], axis=-1).astype(np.float32)
+
+
+def _fill_soft_edge(a, mask, target, new):
+    """Recolour the anti-aliased rim around a filled area.
+
+    Smoothed brush strokes and shape outlines leave pixels that are a blend of the old background
+    and the stroke colour. An exact-colour fill stops at them and leaves a pale ring. For each such
+    pixel the share of background in it is estimated (by projecting it onto the line between the
+    background colour and the nearby solid stroke colour) and exactly that share is swapped for the
+    fill colour, so the edge stays smooth and no ring is left. Only pixels next to the fill are
+    looked at, so the cost follows the length of the border, not the size of the area.
+    """
+    h, w = mask.shape
+    # pixels just outside the fill: 8-neighbours of filled pixels that are not filled
+    edge = np.zeros_like(mask)
+    edge[1:, :] |= mask[:-1, :]
+    edge[:-1, :] |= mask[1:, :]
+    edge[:, 1:] |= mask[:, :-1]
+    edge[:, :-1] |= mask[:, 1:]
+    edge[1:, 1:] |= mask[:-1, :-1]
+    edge[1:, :-1] |= mask[:-1, 1:]
+    edge[:-1, 1:] |= mask[1:, :-1]
+    edge[:-1, :-1] |= mask[1:, 1:]
+    edge &= ~mask
+    ey, ex = np.nonzero(edge)
+    if not len(ey):
+        return
+    # every pixel within EDGE_REACH of the fill lies within EDGE_REACH - 1 of an edge pixel
+    r = EDGE_REACH - 1
+    offs = [(dy, dx) for dy in range(-r, r + 1) for dx in range(-r, r + 1)]
+    py = np.concatenate([ey + dy for dy, dx in offs])
+    px = np.concatenate([ex + dx for dy, dx in offs])
+    keep = (py >= 0) & (py < h) & (px >= 0) & (px < w)
+    flat = np.unique(py[keep].astype(np.int64) * w + px[keep])
+    py, px = flat // w, flat % w
+    keep = ~mask[py, px]
+    py, px = py[keep], px[keep]
+    if not len(py):
+        return
+
+    t = _rgb(target)
+    c = _rgb(a[py, px])
+    # the solid stroke colour: the colour furthest from the background in the neighbourhood
+    best_d = np.full(len(py), -1.0, dtype=np.float32)
+    best_c = np.zeros_like(c)
+    R = EDGE_SEARCH
+    for dy in range(-R, R + 1):
+        for dx in range(-R, R + 1):
+            qy, qx = py + dy, px + dx
+            valid = (qy >= 0) & (qy < h) & (qx >= 0) & (qx < w)
+            qc = _rgb(a[np.clip(qy, 0, h - 1), np.clip(qx, 0, w - 1)])
+            qd = np.where(valid, ((qc - t) ** 2).sum(axis=-1), -1.0)
+            better = qd > best_d
+            best_d = np.where(better, qd, best_d)
+            best_c = np.where(better[:, None], qc, best_c)
+
+    v = t - best_c                                  # stroke -> background
+    L2 = (v ** 2).sum(axis=-1)
+    q = c - best_c
+    with np.errstate(invalid="ignore", divide="ignore"):
+        share = (q * v).sum(axis=-1) / L2           # share of background in the pixel
+        resid = np.sqrt(np.maximum((q ** 2).sum(axis=-1) - share ** 2 * L2, 0.0))
+    share = np.clip(np.nan_to_num(share), 0.0, 1.0).astype(np.float32)
+    L = np.sqrt(L2)
+    cand = (L2 >= 24.0 ** 2) & (share > 0.02) & (share < 0.999) & (resid <= 0.12 * L + 6.0)
+
+    # grow outwards from the fill one ring at a time, only through pixels that get steadily
+    # further from the background, so the rim of a stroke is taken but nothing beyond the stroke
+    keys = py * w + px                              # sorted, so neighbours are found by bisection
+    level = np.full(len(py), -1.0, dtype=np.float32)
+    ok = np.zeros(len(py), dtype=bool)
+    nbrs = [(dy, dx) for dy in (-1, 0, 1) for dx in (-1, 0, 1) if dy or dx]
+    for _ in range(EDGE_REACH):
+        reach = np.full(len(py), -1.0, dtype=np.float32)
+        for dy, dx in nbrs:
+            qy, qx = py + dy, px + dx
+            valid = (qy >= 0) & (qy < h) & (qx >= 0) & (qx < w)
+            qy, qx = np.clip(qy, 0, h - 1), np.clip(qx, 0, w - 1)
+            lv = np.where(mask[qy, qx], 1.0, -1.0).astype(np.float32)
+            key = qy * w + qx
+            pos = np.clip(np.searchsorted(keys, key), 0, len(keys) - 1)
+            lv = np.where(keys[pos] == key, np.maximum(lv, level[pos]), lv)
+            reach = np.maximum(reach, np.where(valid, lv, -1.0))
+        step = cand & ~ok & (reach > 0) & (share <= reach + 0.06)
+        if not step.any():
+            break
+        ok |= step
+        level = np.where(step, share, level)
+    if not ok.any():
+        return
+    out = c[ok] + share[ok, None] * (_rgb(new) - t)
+    out = np.clip(np.rint(out), 0, 255).astype(np.uint32)
+    a[py[ok], px[ok]] = (np.uint32(0xFF000000) | (out[:, 0] << 16) | (out[:, 1] << 8) | out[:, 2])
 
 
 # ------------------------------------------------------------ BMP writing --

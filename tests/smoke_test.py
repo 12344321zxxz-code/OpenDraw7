@@ -10,8 +10,9 @@ import tempfile
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-from PySide6.QtCore import Qt, QPoint, QPointF, QEvent, QSettings, QSize  # noqa: E402
-from PySide6.QtGui import QMouseEvent, QColor, QImage, QGuiApplication  # noqa: E402
+from PySide6.QtCore import Qt, QPoint, QPointF, QRectF, QEvent, QSettings, QSize  # noqa: E402
+from PySide6.QtGui import QMouseEvent, QColor, QImage, QGuiApplication, QPainter, QPen  # noqa: E402
+import numpy as np  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
 
 from opendraw7.app import create_app  # noqa: E402
@@ -336,6 +337,23 @@ big = QImage(1500, 1000, QImage.Format_RGB32)
 big.fill(QColor(255, 255, 255))
 ok(flood_fill(big, 5, 5, QColor(1, 2, 3)) and QColor(big.pixel(1499, 999)).name() == "#010203", "large fill")
 ok(not flood_fill(big, 5, 5, QColor(1, 2, 3)), "fill with same colour is a no-op")
+
+# filling inside a smoothed outline must not leave a pale ring, nor reach past the outline
+ring = QImage(200, 160, QImage.Format_RGB32)
+ring.fill(QColor(255, 255, 255))
+rp = QPainter(ring)
+rp.setRenderHint(QPainter.Antialiasing, True)
+rp.setPen(QPen(QColor(0, 0, 0), 3))
+rp.drawEllipse(QRectF(20, 20, 160, 120))
+rp.end()
+flood_fill(ring, 100, 80, QColor(255, 0, 0))
+ra = const_pixels(ring).astype(np.int64)
+rg = (ra >> 8) & 0xFF
+ryy, rxx = np.mgrid[0:160, 0:200]
+rin = ((rxx - 100) / 80.0) ** 2 + ((ryy - 80) / 60.0) ** 2 < 1.0   # up to the middle of the outline
+ok(int((rin & (rg > 60)).sum()) == 0, "fill leaves no pale ring inside a smoothed outline")
+ok(QColor(ring.pixel(2, 2)).name() == "#ffffff" and QColor(ring.pixel(100, 3)).name() == "#ffffff",
+   "fill stays inside a smoothed outline")
 
 doc.modified = False
 win.close()
