@@ -74,11 +74,23 @@ def flood_fill(img: QImage, x: int, y: int, color: QColor) -> bool:
         return False
     h, w = a.shape
     runs = {}
+    tr, tg, tb = (int(target) >> 16) & 0xFF, (int(target) >> 8) & 0xFF, int(target) & 0xFF
+
+    def same(row):
+        """Pixels that count as the clicked colour (a few steps off still counts, so specks left
+        by rounding on soft edges do not survive the next fill)."""
+        if FILL_TOLERANCE == 0:
+            return row == target
+        r = ((row >> 16) & 0xFF).astype(np.int16)
+        g = ((row >> 8) & 0xFF).astype(np.int16)
+        b = (row & 0xFF).astype(np.int16)
+        return ((np.abs(r - tr) <= FILL_TOLERANCE) & (np.abs(g - tg) <= FILL_TOLERANCE)
+                & (np.abs(b - tb) <= FILL_TOLERANCE))
 
     def row_runs(ry):
         r = runs.get(ry)
         if r is None:
-            m = (a[ry] == target)
+            m = same(a[ry])
             d = np.diff(np.concatenate(([0], m.view(np.int8), [0])))
             starts = np.flatnonzero(d == 1)
             ends = np.flatnonzero(d == -1) - 1
@@ -116,7 +128,10 @@ def flood_fill(img: QImage, x: int, y: int, color: QColor) -> bool:
     return True
 
 
-EDGE_REACH = 2      # how far past the filled area anti-aliased edge pixels are looked for
+FILL_TOLERANCE = 3  # per-channel difference still treated as the clicked colour
+SNAP = 6            # rim pixels this close to the fill colour become exactly the fill colour
+NEAR = 12           # rim pixels this close to the clicked colour are taken over whole
+EDGE_REACH = 4      # how far past the filled area anti-aliased edge pixels are looked for
 EDGE_SEARCH = 3     # radius of the window searched for the edge's solid colour
 
 
@@ -187,7 +202,11 @@ def _fill_soft_edge(a, mask, target, new):
         resid = np.sqrt(np.maximum((q ** 2).sum(axis=-1) - share ** 2 * L2, 0.0))
     share = np.clip(np.nan_to_num(share), 0.0, 1.0).astype(np.float32)
     L = np.sqrt(L2)
-    cand = (L2 >= 24.0 ** 2) & (share > 0.02) & (share < 0.999) & (resid <= 0.12 * L + 6.0)
+    cand = (L2 >= 24.0 ** 2) & (share > 0.02) & (resid <= 0.12 * L + 6.0)
+    # specks only slightly off the clicked colour (overlapping soft strokes, rounding) go whole
+    near_t = (np.abs(c - t) <= NEAR).all(axis=-1)
+    share = np.where(near_t, 1.0, share).astype(np.float32)
+    cand |= near_t
 
     # grow outwards from the fill one ring at a time, only through pixels that get steadily
     # further from the background, so the rim of a stroke is taken but nothing beyond the stroke
@@ -214,7 +233,11 @@ def _fill_soft_edge(a, mask, target, new):
     if not ok.any():
         return
     out = c[ok] + share[ok, None] * (_rgb(new) - t)
-    out = np.clip(np.rint(out), 0, 255).astype(np.uint32)
+    out = np.clip(np.rint(out), 0, 255).astype(np.int32)
+    nc = _rgb(new).astype(np.int32)
+    near_new = (np.abs(out - nc) <= SNAP).all(axis=-1)
+    out[near_new] = nc
+    out = out.astype(np.uint32)
     a[py[ok], px[ok]] = (np.uint32(0xFF000000) | (out[:, 0] << 16) | (out[:, 1] << 8) | out[:, 2])
 
 

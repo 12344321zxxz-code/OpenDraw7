@@ -58,6 +58,11 @@ packaged build and refuses to archive a build that fails.
   swaps only the background's share of each rim pixel and grows outwards only while pixels get
   darker, so it cannot step across a thin line. It works on border pixels only; keep it that way,
   a whole-area version took 14 s on a 4000x3000 picture.
+- Refilling such an area left specks: rim pixels rounded to a shade a step or two off, and the next
+  exact-colour fill skipped them. So the fill counts colours within `FILL_TOLERANCE` (3) as the
+  clicked one, snaps rim results near the fill colour to it exactly, takes rim pixels within `NEAR`
+  of the clicked colour whole, and reaches 4 px (a size-1 brush's soft fade is that wide). When
+  testing with a drawn loop, make sure the loop actually closes or the fill leaks for real.
 - The app sets `QT_QPA_PLATFORM=xcb;wayland` on Linux because the custom title bar was only tested
   on X11. Native Wayland is untested.
 

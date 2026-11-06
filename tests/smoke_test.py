@@ -22,7 +22,7 @@ QSettings.setDefaultFormat(QSettings.IniFormat)
 QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, tempfile.mkdtemp())
 
 from opendraw7.mainwindow import MainWindow  # noqa: E402
-from opendraw7.brushes import BRUSHES  # noqa: E402
+from opendraw7.brushes import BRUSHES, make_stroke  # noqa: E402
 from opendraw7.shapes import SHAPES  # noqa: E402
 from opendraw7.document import (FORMATS, save_image, load_image, reduce_colors, const_pixels,  # noqa: E402
                                 flood_fill)
@@ -354,6 +354,22 @@ rin = ((rxx - 100) / 80.0) ** 2 + ((ryy - 80) / 60.0) ** 2 < 1.0   # up to the m
 ok(int((rin & (rg > 60)).sum()) == 0, "fill leaves no pale ring inside a smoothed outline")
 ok(QColor(ring.pixel(2, 2)).name() == "#ffffff" and QColor(ring.pixel(100, 3)).name() == "#ffffff",
    "fill stays inside a smoothed outline")
+# fill a thin soft brush loop, fill it back to white, then fill everything: no specks may survive
+loop = QImage(300, 220, QImage.Format_RGB32)
+loop.fill(QColor(255, 255, 255))
+dark = QColor(136, 0, 21)
+lst = make_stroke("brush", loop, dark, 1)
+lpts = [QPointF(150 + 100 * math.cos(k / 60 * 2 * math.pi) + 8 * math.sin(k / 60 * 2 * math.pi * 7),
+                110 + 70 * math.sin(k / 60 * 2 * math.pi)) for k in range(61)]
+for la, lb in zip(lpts, lpts[1:]):
+    lst.segment(la, lb)
+flood_fill(loop, 150, 110, dark)
+flood_fill(loop, 150, 110, QColor(255, 255, 255))
+la_ = const_pixels(loop).astype(np.int64)
+ok(int((((la_ >> 8) & 0xFF) < 230).sum()) == 0, "refilling a filled soft shape leaves no specks")
+flood_fill(loop, 2, 2, dark)
+la_ = const_pixels(loop).astype(np.int64)
+ok(int((((la_ >> 8) & 0xFF) > 24).sum()) == 0, "filling everything after a refill leaves no specks")
 
 doc.modified = False
 win.close()
