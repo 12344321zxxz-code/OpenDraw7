@@ -83,4 +83,5 @@ def main(argv=None):
     if args.file:
         win.open_path(args.file)
     win.show()
+    win.enable_autosave()
     return app.exec()

@@ -7,9 +7,27 @@ from PySide6.QtWidgets import QAbstractScrollArea, QFrame
 
 from . import theme as T
 from . import icons
-from .document import flatten, load_image
+from .document import load_image
 from .tools import (Ev, FreehandTool, FillTool, PickerTool, MagnifierTool, SelectTool, ShapeTool,
                     CurveTool, PolygonTool, TextTool)
+
+_CHECKER = None
+
+
+def checker_brush():
+    """Grey and white squares shown through see-through parts of the picture."""
+    global _CHECKER
+    if _CHECKER is None:
+        from PySide6.QtGui import QBrush, QPixmap
+        pm = QPixmap(16, 16)
+        pm.fill(QColor(255, 255, 255))
+        p = QPainter(pm)
+        p.fillRect(8, 0, 8, 8, QColor(204, 204, 204))
+        p.fillRect(0, 8, 8, 8, QColor(204, 204, 204))
+        p.end()
+        _CHECKER = QBrush(pm)
+    return _CHECKER
+
 
 ZOOMS = [0.125, 0.25, 0.5, 1, 2, 3, 4, 5, 6, 7, 8]
 MARGIN = 5
@@ -188,6 +206,21 @@ class Canvas(QAbstractScrollArea):
     def zoom_step(self, d, center_doc=None):
         self.set_zoom(self.next_zoom(d), center_doc)
 
+    def fit_zoom(self) -> float:
+        """Largest zoom at which the whole picture fits the work area."""
+        vp = self.viewport().size()
+        avail_w, avail_h = vp.width() - MARGIN - 18, vp.height() - MARGIN - 18
+        z = min(avail_w / max(1, self.doc.width()), avail_h / max(1, self.doc.height()))
+        return max(ZOOMS[0], min(ZOOMS[-1], z))
+
+    def zoom_to_fit(self):
+        z = self.fit_zoom()
+        if z >= 1:
+            z = max(v for v in ZOOMS if v <= z)     # keep whole-number zooms crisp
+        self.set_zoom(z, QPointF(self.doc.width() / 2.0, self.doc.height() / 2.0))
+        self.horizontalScrollBar().setValue(0)
+        self.verticalScrollBar().setValue(0)
+
     def set_zoom(self, z, center_doc=None):
         z = max(ZOOMS[0], min(ZOOMS[-1], float(z)))
         vp = self.viewport().size()
@@ -230,6 +263,8 @@ class Canvas(QAbstractScrollArea):
             sy0 = max(0, int(math.floor((vis.top() - o.y()) / z)))
             sx1 = min(w, int(math.ceil((vis.right() + 1 - o.x()) / z)))
             sy1 = min(h, int(math.ceil((vis.bottom() + 1 - o.y()) / z)))
+            if img.hasAlphaChannel():
+                p.fillRect(vis, checker_brush())
             p.setRenderHint(QPainter.SmoothPixmapTransform, z < 1)
             p.drawImage(QRectF(o.x() + sx0 * z, o.y() + sy0 * z, (sx1 - sx0) * z, (sy1 - sy0) * z),
                         img, QRectF(sx0, sy0, sx1 - sx0, sy1 - sy0))
@@ -496,7 +531,7 @@ class Canvas(QAbstractScrollArea):
         else:
             self.commit_pending()
             self.doc.push_undo()
-            self.doc.set_image(flatten(fn(self.doc.image), self.state.color2))
+            self.doc.set_image(fn(self.doc.image), self.state.color2)
         self.stateChanged.emit()
 
     def rotate(self, kind):

@@ -37,7 +37,7 @@ ITEMS = [
     {"id": "save", "text": "Save", "icon": "save32", "key": "S"},
     {"id": "saveas", "text": "Save as", "icon": "saveas32", "key": "a", "sub": ("Save as", SAVE_AS), "sep": True},
     {"id": "print", "text": "Print", "icon": "print32", "key": "P", "sub": ("Print", PRINT)},
-    {"id": "scanner", "text": "From scanner or camera", "icon": "scanner32", "key": "m", "disabled": True},
+    {"id": "scanner", "text": "From scanner or camera", "icon": "scanner32", "key": "m"},
     {"id": "email", "text": "Send in e-mail", "icon": "email32", "key": "d", "sep": True},
     {"id": "desktop:fill", "text": "Set as desktop background", "icon": "desktop32", "key": "b",
      "sub": ("Set as desktop background", DESKTOP)},

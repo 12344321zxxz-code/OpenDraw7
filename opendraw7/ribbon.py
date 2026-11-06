@@ -1096,15 +1096,20 @@ class ShapeGallery(QWidget):
         elif h[0] == "down":
             self.row0 = min(max(0, self.total_rows - self.ROWS), self.row0 + 1)
         elif h[0] == "more":
-            items = [(sid, lab, icons.shape_glyph(sid)) for sid, lab in self.shapes]
-            pop = GridPopup(items, self.COLS, 22, self.current, self)
-            pop.picked.connect(self.picked)
-            self._more_open = True
-            pop.closed.connect(self._more_closed)
-            pop.adjustSize()
-            g = self.mapToGlobal(QPoint(0, 0))
-            pop.move(g)
-            pop.show()
+            self.open_more()
+        self.update()
+
+    def open_more(self):
+        """Show every shape in a drop-down grid."""
+        items = [(sid, lab, icons.shape_glyph(sid)) for sid, lab in self.shapes]
+        pop = GridPopup(items, self.COLS, 22, self.current, self)
+        pop.picked.connect(self.picked)
+        self._more_open = True
+        pop.closed.connect(self._more_closed)
+        pop.adjustSize()
+        g = self.mapToGlobal(QPoint(0, 0))
+        pop.move(g)
+        pop.show()
         self.update()
 
     def _more_closed(self):

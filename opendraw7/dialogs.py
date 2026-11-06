@@ -153,6 +153,11 @@ class PropertiesDialog(QDialog):
         self.c_col.setChecked(True)
         cl.addWidget(self.c_bw)
         cl.addWidget(self.c_col)
+        self.c_clear = QCheckBox("Transparent background")
+        self.c_clear.setToolTip("The eraser, Delete and Cut leave see-through areas.\n"
+                                "PNG, GIF and TIFF files keep them.")
+        self.c_clear.setChecked(doc.transparent)
+        cl.addWidget(self.c_clear)
         cl.addStretch(1)
         row.addWidget(cb)
         lay.addLayout(row)
@@ -212,7 +217,7 @@ class PropertiesDialog(QDialog):
 
     def values(self):
         self._read()
-        return self.px.width(), self.px.height(), self.c_bw.isChecked()
+        return self.px.width(), self.px.height(), self.c_bw.isChecked(), self.c_clear.isChecked()
 
 
 class AboutDialog(QDialog):

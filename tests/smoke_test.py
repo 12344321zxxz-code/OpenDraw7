@@ -10,7 +10,7 @@ import tempfile
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-from PySide6.QtCore import Qt, QPoint, QPointF, QRectF, QEvent, QSettings, QSize  # noqa: E402
+from PySide6.QtCore import Qt, QPoint, QPointF, QRect, QRectF, QEvent, QSettings, QSize  # noqa: E402
 from PySide6.QtGui import QMouseEvent, QColor, QImage, QGuiApplication, QPainter, QPen  # noqa: E402
 import numpy as np  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
@@ -370,6 +370,193 @@ ok(int((((la_ >> 8) & 0xFF) < 230).sum()) == 0, "refilling a filled soft shape l
 flood_fill(loop, 2, 2, dark)
 la_ = const_pixels(loop).astype(np.int64)
 ok(int((((la_ >> 8) & 0xFF) > 24).sum()) == 0, "filling everything after a refill leaves no specks")
+
+st.set_color(1, QColor(0, 0, 0))
+st.set_color(2, QColor(255, 255, 255))
+# ---- zoom to fit ----------------------------------------------------------------
+doc.new(1600, 1200)
+c.zoom_to_fit()
+app.processEvents()
+vps = c.viewport().size()
+ok(doc.width() * c.zoom <= vps.width() and doc.height() * c.zoom <= vps.height() and c.zoom < 1, "zoom to fit shrinks")
+doc.new(100, 80)
+c.zoom_to_fit()
+ok(c.zoom > 1 and c.zoom == int(c.zoom), "zoom to fit enlarges small pictures to a whole zoom")
+c.set_zoom(1.0)
+
+
+# ---- magic wand ---------------------------------------------------------------
+def paint_test_picture():
+    doc.new(400, 300)
+    p = QPainter(doc.image)
+    p.fillRect(40, 40, 100, 60, QColor(255, 0, 0))
+    p.setRenderHint(QPainter.Antialiasing, True)
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor(0, 0, 255))
+    p.drawEllipse(QRectF(200, 100, 120, 120))
+    p.end()
+    doc.changed.emit()
+    app.processEvents()
+
+
+paint_test_picture()
+st.set_tool("select")
+st.set_sel_mode("wand")
+QTest.mouseClick(vpw, Qt.LeftButton, Qt.NoModifier, vp(60, 60))
+app.processEvents()
+s = c.select_tool.sel
+ok(s is not None and s.rect == QRect(40, 40, 100, 60), "wand selects the red rectangle")
+QTest.mouseClick(vpw, Qt.LeftButton, Qt.ShiftModifier, vp(260, 160))
+app.processEvents()
+s = c.select_tool.sel
+ok(s is not None and s.rect.right() >= 318 and s.mask is not None, "shift+wand adds the circle")
+ok(len(s.edges()) > 10, "wand selection has an outline")
+c.delete_selection()
+ok(px(60, 60) == WHITE and px(260, 160) == WHITE and px(10, 10) == WHITE, "deleting a wand selection")
+c.undo()
+ok(px(60, 60) == "#ff0000" and px(260, 160) == "#0000ff", "undo after wand delete")
+QTest.mouseClick(vpw, Qt.LeftButton, Qt.NoModifier, vp(10, 10))
+app.processEvents()
+c.invert_selection()
+s = c.select_tool.sel
+ok(s is not None and s.mask is not None and s.mask[60 - s.rect.top(), 60 - s.rect.left()]
+   and not s.mask[10 - s.rect.top(), 10 - s.rect.left()] if s.rect.contains(QPoint(10, 10)) else True,
+   "invert a wand selection")
+c.commit_pending()
+# wand selection moves its exact shape: drag the circle and the square stays
+QTest.mouseClick(vpw, Qt.LeftButton, Qt.NoModifier, vp(260, 160))
+app.processEvents()
+drag([(260, 160), (230, 160), (200, 160)])
+c.commit_pending()
+ok(px(200, 160) == "#0000ff" and px(60, 60) == "#ff0000" and px(315, 160) == WHITE, "move a wand selection")
+st.set_sel_mode("rect")
+
+# ---- shift-drag trail ---------------------------------------------------------------
+paint_test_picture()
+st.set_tool("select")
+drag([(39, 39), (141, 101)])
+before = int((const_pixels(doc.image) == 0xFFFF0000).sum())
+drag([(80, 70), (110, 70), (140, 70), (170, 70), (200, 70)], mods=Qt.ShiftModifier)
+c.commit_pending()
+after = int((const_pixels(doc.image) == 0xFFFF0000).sum())
+ok(px(60, 60) == "#ff0000" and px(150, 60) == "#ff0000" and after > before * 1.8, "shift-drag leaves a trail")
+
+# ---- transparency -------------------------------------------------------------------
+paint_test_picture()
+doc.set_transparent(True)
+ok(doc.transparent and px(60, 60) == "#ff0000", "turn on transparent background")
+st.set_tool("eraser")
+drag([(150, 20), (190, 20), (190, 60)])
+ok(QColor.fromRgba(doc.image.pixel(170, 20)).alpha() == 0, "eraser clears to transparent")
+st.set_tool("select")
+drag([(39, 39), (141, 101)])
+c.delete_selection()
+ok(QColor.fromRgba(doc.image.pixel(60, 60)).alpha() == 0, "delete clears to transparent")
+st.set_tool("fill")
+QTest.mouseClick(vpw, Qt.LeftButton, Qt.NoModifier, vp(60, 60))
+app.processEvents()
+ok(QColor.fromRgba(doc.image.pixel(60, 60)).alpha() == 255, "fill a transparent area")
+c.undo()
+tmp = tempfile.mkdtemp()
+for ext, fmt, keeps in (("png", "png", True), ("gif", "gif", True), ("tif", "tiff", True), ("jpg", "jpeg", False),
+                        ("bmp", "bmp24", False)):
+    path = os.path.join(tmp, "clear." + ext)
+    save_image(doc.image, path, fmt)
+    back = load_image(path)
+    ok(back.hasAlphaChannel() == keeps and (QColor.fromRgba(back.pixel(60, 60)).alpha() == 0) == keeps,
+       f"transparency round trip through {ext}")
+    ok(QColor.fromRgba(back.pixel(260, 160)).name() in ("#0000ff", "#0000fe", "#0100ff"), f"colours survive {ext}")
+c.rotate("r90")
+ok(doc.transparent, "rotating keeps transparency")
+c.undo()
+st.set_tool("select")
+drag([(149, 9), (196, 66)])
+c.crop()
+ok(doc.transparent and doc.size() == QSize(47, 57) and QColor.fromRgba(doc.image.pixel(21, 11)).alpha() == 0,
+   "crop keeps transparency")
+c.undo()
+doc.set_transparent(False)
+ok(not doc.transparent and px(60, 60) == WHITE, "turn off transparent background")
+c.undo()
+ok(doc.transparent, "undo brings transparency back")
+c.undo()
+c.undo()
+doc.new(800, 600)
+
+# ---- autosave and crash recovery ------------------------------------------------------
+import json  # noqa: E402
+from opendraw7.recovery import AutoSaver, leftovers  # noqa: E402
+rdir = tempfile.mkdtemp()
+saver = AutoSaver(win, interval=10 ** 9, folder=rdir)
+ok(not saver.save_now(wait=True), "nothing to autosave on an unchanged picture")
+paint_test_picture()
+doc.push_undo()
+doc.changed.emit()
+ok(saver.save_now(wait=True) and os.path.exists(saver.png) and os.path.exists(saver.json), "autosave writes a copy")
+ok(not leftovers(rdir), "a running window's copy is not offered for recovery")
+meta = json.load(open(saver.json))
+meta["pid"] = 2 ** 22 + 12345                 # pretend it was left by a process that is gone
+json.dump(meta, open(saver.json, "w"))
+found = leftovers(rdir)
+ok(len(found) == 1, "a crashed window's copy is found")
+doc.new(800, 600)
+ok(not os.path.exists(saver.png), "starting a new picture removes the copy")
+from PySide6.QtGui import QImage as _QI  # noqa: E402
+doc.restore(_QI(found[0][1]) if os.path.exists(found[0][1]) else doc.image, None, "png")
+paint_test_picture()
+doc.push_undo()
+doc.changed.emit()
+saver.save_now(wait=True)
+img_copy = _QI(saver.png)
+doc.new(800, 600)
+doc.restore(img_copy, "/tmp/somewhere/pic.png", "png")
+ok(doc.modified and doc.path == "/tmp/somewhere/pic.png" and px(60, 60) == "#ff0000" and doc.size() == QSize(400, 300),
+   "restore brings the picture back unsaved")
+saver.clear()
+saver.timer.stop()
+doc.new(800, 600)
+
+# ---- text on a picture made by convertToFormat (opened file, transparent) keeps the picture alive ----
+import gc  # noqa: E402
+for transparent in (True, False):
+    doc.new(300, 200)
+    doc.set_transparent(transparent)
+    st.set_tool("text")
+    c.text_tool._create(QRect(10, 10, 200, 40))
+    c.text_tool.insert_text("Hello")
+    win.grab()
+    c.commit_pending()
+    gc.collect()
+    app.processEvents()
+    alive = True
+    try:
+        doc.image.width()
+    except RuntimeError:
+        alive = False
+    ok(alive, f"text keeps the picture alive (transparent={transparent})")
+doc.new(800, 600)
+
+# ---- key tips -------------------------------------------------------------------------
+win.activateWindow()
+QTest.qWait(100)
+if win.isActiveWindow():
+    QTest.keyPress(c, Qt.Key_Alt)
+    QTest.keyRelease(c, Qt.Key_Alt)
+    ok(win.keytips.level == 1 and {"F", "H", "V"} <= {t.keys for t in win.keytips.overlay.tips}, "alt shows key tips")
+    QTest.keyClick(c, Qt.Key_H)
+    QTest.keyClick(c, Qt.Key_P)
+    QTest.qWait(30)
+    ok(st.tool == "pencil" and win.keytips.level == 0, "key tips H, P pick the pencil")
+    QTest.keyClick(c, Qt.Key_F10)
+    QTest.keyClick(c, Qt.Key_V)
+    QTest.keyClick(c, Qt.Key_G)
+    QTest.qWait(30)
+    ok(c.show_grid and win.ribbon.current() == win.view_idx, "key tips F10, V, G show gridlines")
+    win.set_grid(False)
+    win.ribbon.set_current(win.home_idx)
+    QTest.keyClick(c, Qt.Key_F10)
+    QTest.keyClick(c, Qt.Key_Escape)
+    ok(win.keytips.level == 0, "esc hides key tips")
 
 doc.modified = False
 win.close()

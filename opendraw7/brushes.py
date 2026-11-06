@@ -181,12 +181,18 @@ class Stroke:
 
 
 class PencilStroke(Stroke):
-    """Hard-edged square dabs (pencil and eraser)."""
+    """Hard-edged square dabs (pencil and eraser). With clear, dabs make the picture see-through."""
+
+    def __init__(self, img, color, size, clear=False):
+        super().__init__(img, color, size)
+        self.clear = clear
 
     def segment(self, a, b):
         n = self.size
         off = n // 2
         p = QPainter(self.img)
+        if self.clear:
+            p.setCompositionMode(QPainter.CompositionMode_Clear)
         for x, y in _line_points(int(math.floor(a.x())), int(math.floor(a.y())),
                                  int(math.floor(b.x())), int(math.floor(b.y()))):
             p.fillRect(x - off, y - off, n, n, self.color)

@@ -8,7 +8,7 @@ from PySide6.QtCore import Qt, QPoint, QRect, QSize, QSettings, QTimer, QEvent, 
 from PySide6.QtGui import (QPainter, QColor, QPen, QBrush, QLinearGradient, QKeySequence, QShortcut,
                            QFont, QFontMetrics, QImage, QDesktopServices, QGuiApplication, QPageLayout,
                            QFontDatabase)
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QGridLayout, QFileDialog, QMessageBox, QColorDialog,
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QGridLayout, QFileDialog, QMessageBox,
                                QFontComboBox, QComboBox, QApplication, QDialog)
 
 from . import theme as T
@@ -107,6 +107,8 @@ class MainWindow(QWidget):
         self.thumb = None
         self._printer = None
         self._color_sets = []
+        self._color_btns = []
+        self.autosaver = None
 
         fams = QFontDatabase.families()
         for cand in ("Segoe UI", "Calibri", "Carlito", "DejaVu Sans", "Liberation Sans", "Noto Sans", "Arial"):
@@ -152,7 +154,7 @@ class MainWindow(QWidget):
         tb.maximizeRequested.connect(self._toggle_max)
         tb.closeRequested.connect(self.close)
         self.ribbon.tabbar.appButtonPressed.connect(self._open_app_menu)
-        self.ribbon.tabbar.helpClicked.connect(self.about)
+        self.ribbon.tabbar.helpClicked.connect(self.show_help)
 
         c = self.canvas
         c.cursorMoved.connect(self._cursor_moved)
@@ -178,6 +180,8 @@ class MainWindow(QWidget):
         self.resize(max(520, w), max(360, h))
         self.move(avail.left() + max(0, (avail.width() - self.width()) // 2),
                   avail.top() + max(0, (avail.height() - self.height()) // 2))
+        from .keytips import KeyTips
+        self.keytips = KeyTips(self)
         self._doc_info()
         self.refresh()
         self.canvas.setFocus()
@@ -341,6 +345,7 @@ class MainWindow(QWidget):
         pal.picked.connect(self._palette_picked)
         edit.clicked.connect(self.edit_colors)
         self._color_sets.append((c1, c2, pal))
+        self._color_btns.append((c1, c2, edit))
         return g
 
     def _palette_picked(self, color, button):
@@ -440,6 +445,7 @@ class MainWindow(QWidget):
         m.add_header("Selection shapes")
         m.add_item("Rectangular selection", "sel_rect", lambda: self._set_sel_mode("rect"))
         m.add_item("Free-form selection", "sel_free", lambda: self._set_sel_mode("free"))
+        m.add_item("Magic wand selection", "sel_wand", lambda: self._set_sel_mode("wand"))
         m.add_header("Selection options")
         m.add_item("Select all", "sel_all", c.select_all, shortcut="Ctrl+A")
         m.add_item("Invert selection", "sel_invert", c.invert_selection, enabled=c.has_selection())
@@ -495,9 +501,14 @@ class MainWindow(QWidget):
         zout = RButton("Zoom\nout", "zoomout32", "large",
                        tip=tip_html("Zoom out", "Zoom out on the picture.", "Ctrl+PgDn"))
         z100 = RButton("100\n%", "zoom100_32", "large", tip=tip_html("100%", "Zoom to 100%."))
+        zfit = RButton("Fit to\nwindow", "zoomfit32", "large", tip=tip_html(
+            "Fit to window", "Zoom so the whole picture fits in the window.", "Ctrl+0"))
         g.add(zin, 0, 0)
         g.add(zout, zin.width() + 2, 0)
         g.add(z100, zin.width() + zout.width() + 4, 0)
+        g.add(zfit, zin.width() + zout.width() + z100.width() + 6, 0)
+        zfit.clicked.connect(c.zoom_to_fit)
+        self.z100_btn, self.zfit_btn = z100, zfit
         zin.clicked.connect(lambda: c.zoom_step(1))
         zout.clicked.connect(lambda: c.zoom_step(-1))
         z100.clicked.connect(lambda: c.set_zoom(1.0))
@@ -528,6 +539,7 @@ class MainWindow(QWidget):
         g.add(full, 0, 0)
         g.add(self.thumb_btn, full.width() + 2, 0)
         full.clicked.connect(self.full_screen)
+        self.full_btn = full
         self.thumb_btn.clicked.connect(self.toggle_thumbnail)
         page.add_group(g)
         self.view_idx = self.ribbon.add_page("View", page)
@@ -654,8 +666,9 @@ class MainWindow(QWidget):
             ("Ctrl+Shift+I", c.invert_colors),
             ("Ctrl+R", lambda: self.set_rulers(not self.hruler.isVisible())),
             ("Ctrl+G", lambda: self.set_grid(not c.show_grid)),
+            ("Ctrl+0", c.zoom_to_fit),
             ("Ctrl+PgUp", lambda: c.zoom_step(1)), ("Ctrl+PgDown", lambda: c.zoom_step(-1)),
-            ("F11", self.full_screen), ("F1", self.about),
+            ("F11", self.full_screen), ("F1", self.show_help),
             ("Ctrl+F1", lambda: self.ribbon.set_minimized(not self.ribbon.minimized)),
             ("Ctrl++", lambda: self._bump_size(1)), ("Ctrl+=", lambda: self._bump_size(1)),
             ("Ctrl+-", lambda: self._bump_size(-1)), ("Alt+F4", self.close),
@@ -692,7 +705,7 @@ class MainWindow(QWidget):
         self.q_undo.setEnabled(d.can_undo() or c.tool.has_pending())
         self.q_redo.setEnabled(d.can_redo())
         self.select_btn.setChecked(st.tool == "select")
-        self.select_btn.set_icon("select_free32" if st.sel_mode == "free" else "select32")
+        self.select_btn.set_icon({"free": "select_free32", "wand": "select_wand32"}.get(st.sel_mode, "select32"))
         for tid, b in self.tool_btns.items():
             b.setChecked(st.tool == tid)
         self.brush_btn.setChecked(st.tool == "brush")
@@ -737,6 +750,8 @@ class MainWindow(QWidget):
 
     def resizeEvent(self, e):
         QTimer.singleShot(0, self._place_context)
+        if getattr(self, "keytips", None) is not None and self.keytips.active():
+            self.keytips.hide()
         super().resizeEvent(e)
 
     # ================================================================ commands ==
@@ -813,36 +828,55 @@ class MainWindow(QWidget):
             c.resize_skew(w, h, sh, sv)
 
     def edit_colors(self):
+        from .colordialog import EditColorsDialog
         st = self.state
-        dlg = QColorDialog(st.color1 if st.active == 1 else st.color2, self)
-        dlg.setWindowTitle("Edit Colors")
-        dlg.setOption(QColorDialog.DontUseNativeDialog, True)
-        pal = self._color_sets[0][2]
-        for i, col in enumerate(pal.custom):
-            QColorDialog.setCustomColor(i, col if col is not None else QColor(255, 255, 255))
+        saved = self.settings.value("custom_colors", [])
+        if isinstance(saved, str):
+            saved = [saved]
+        custom = [QColor(c) for c in (saved or []) if QColor.isValidColorName(c)]
+        if not custom:
+            custom = [c for c in self._color_sets[0][2].custom if c is not None]
+        dlg = EditColorsDialog(st.color1 if st.active == 1 else st.color2, custom, self)
         if dlg.exec() == QDialog.Accepted:
-            col = dlg.currentColor()
+            col = dlg.current_color()
             for _c1, _c2, p in self._color_sets:
                 p.add_custom(col)
             st.set_active_color(col)
+        self.settings.setValue("custom_colors", [c.name() for c in dlg.custom])
 
     def properties(self):
         self.canvas.commit_pending()
         dlg = PropertiesDialog(self.doc, self)
         if dlg.exec() != QDialog.Accepted:
             return
-        w, h, bw = dlg.values()
+        w, h, bw, clear = dlg.values()
+        self.doc.set_transparent(clear)
         if bw:
             r = QMessageBox.warning(self, "Paint", "Converting to black and white cannot be undone. This action "
                                     "affects the current file and may cause some color information to be lost.\n\n"
                                     "Do you want to continue?", QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
             if r == QMessageBox.Yes:
                 self.doc.push_undo()
-                self.doc.set_image(reduce_colors(self.doc.image, "bmp1"))
+                img = reduce_colors(self.doc.image, "bmp1")
+                if self.doc.transparent:     # keep the see-through areas see-through
+                    img = img.convertToFormat(QImage.Format_ARGB32_Premultiplied)
+                    p = QPainter(img)
+                    p.setCompositionMode(QPainter.CompositionMode_DestinationIn)
+                    p.drawImage(0, 0, self.doc.image)
+                    p.end()
+                self.doc.set_image(img)
         self.doc.resize_canvas(w, h, self.state.color2)
 
     def about(self):
         AboutDialog(self).exec()
+
+    def show_help(self):
+        from .helpwindow import HelpWindow
+        if getattr(self, "_help", None) is None:
+            self._help = HelpWindow(self)
+        self._help.show()
+        self._help.raise_()
+        self._help.activateWindow()
 
     # -- files -------------------------------------------------------------------
     def _recent(self):
@@ -941,6 +975,22 @@ class MainWindow(QWidget):
         self.settings.setValue("dir", os.path.dirname(os.path.abspath(path)))
         self._add_recent(os.path.abspath(path))
         return True
+
+    def from_scanner(self):
+        from .scanner import acquire
+        from .document import load_image
+        if not self.maybe_save():
+            return
+        path = acquire(self)
+        if not path:
+            return
+        try:
+            img = load_image(path)
+        except Exception as ex:
+            QMessageBox.warning(self, "Paint", f"Paint cannot read the picture from the device.\n\n{ex}")
+            return
+        self.doc.restore(img, None, "png")
+        self.canvas.set_zoom(1.0)
 
     def paste_from(self):
         path, _ = QFileDialog.getOpenFileName(self, "Paste From", self._start_dir(), OPEN_FILTER)
@@ -1069,6 +1119,7 @@ class MainWindow(QWidget):
             "new": self.new, "open": self.open, "save": self.save, "saveas": self.save_as,
             "print": self.print_, "print:setup": self.page_setup, "print:preview": self.print_preview,
             "email": self.send_email, "properties": self.properties, "about": self.about, "exit": self.close,
+            "scanner": self.from_scanner,
         }
         fn = handlers.get(action)
         if fn:
@@ -1086,10 +1137,18 @@ class MainWindow(QWidget):
                     self.open_path(u.toLocalFile())
                 return
 
+    def enable_autosave(self):
+        """Keep recovery copies while there are unsaved changes, and offer any left by a crash."""
+        from .recovery import AutoSaver, offer_restore
+        self.autosaver = AutoSaver(self)
+        QTimer.singleShot(300, lambda: offer_restore(self))
+
     def closeEvent(self, e):
         if self.maybe_save():
             if self.thumb is not None:
                 self.thumb.close()
+            if self.autosaver is not None:
+                self.autosaver.clear()
             e.accept()
         else:
             e.ignore()

@@ -51,6 +51,17 @@ def const_pixels(img: QImage):
     return np.frombuffer(img.constBits(), dtype=np.uint32).reshape(h, img.bytesPerLine() // 4)[:, :w]
 
 
+ALPHA_FMT = QImage.Format_ARGB32_Premultiplied
+
+
+def has_transparency(img: QImage) -> bool:
+    """True if any pixel of img is not fully opaque."""
+    if not img.hasAlphaChannel():
+        return False
+    a = const_pixels(img.convertToFormat(ALPHA_FMT))
+    return bool((a < np.uint32(0xFF000000)).any())
+
+
 def flatten(img: QImage, bg=QColor(255, 255, 255)) -> QImage:
     """Any image -> opaque RGB32, compositing transparency over bg."""
     if img.format() == QImage.Format_RGB32:
@@ -63,29 +74,22 @@ def flatten(img: QImage, bg=QColor(255, 255, 255)) -> QImage:
     return out
 
 
-def flood_fill(img: QImage, x: int, y: int, color: QColor) -> bool:
-    """4-connected fill of the exact-colour region containing (x, y), anti-aliased rim included."""
-    if not (0 <= x < img.width() and 0 <= y < img.height()):
-        return False
-    new = np.uint32(0xFF000000 | (color.rgb() & 0xFFFFFF))
-    a = pixels(img)
-    target = a[y, x]
-    if target == new:
-        return False
+def flood_region(a, x: int, y: int, tolerance: int = 0):
+    """Mask of the 4-connected area around (x, y) whose colour (alpha included) is within
+    `tolerance` per channel of the colour at (x, y). `a` is an (h, w) uint32 ARGB array."""
     h, w = a.shape
+    target = int(a[y, x])
+    tch = [(target >> sh) & 0xFF for sh in (24, 16, 8, 0)]
     runs = {}
-    tr, tg, tb = (int(target) >> 16) & 0xFF, (int(target) >> 8) & 0xFF, int(target) & 0xFF
 
     def same(row):
-        """Pixels that count as the clicked colour (a few steps off still counts, so specks left
-        by rounding on soft edges do not survive the next fill)."""
-        if FILL_TOLERANCE == 0:
-            return row == target
-        r = ((row >> 16) & 0xFF).astype(np.int16)
-        g = ((row >> 8) & 0xFF).astype(np.int16)
-        b = (row & 0xFF).astype(np.int16)
-        return ((np.abs(r - tr) <= FILL_TOLERANCE) & (np.abs(g - tg) <= FILL_TOLERANCE)
-                & (np.abs(b - tb) <= FILL_TOLERANCE))
+        if tolerance == 0:
+            return row == np.uint32(target)
+        m = None
+        for sh, tv in zip((24, 16, 8, 0), tch):
+            ok = np.abs(((row >> sh) & 0xFF).astype(np.int16) - tv) <= tolerance
+            m = ok if m is None else (m & ok)
+        return m
 
     def row_runs(ry):
         r = runs.get(ry)
@@ -123,6 +127,22 @@ def flood_fill(img: QImage, x: int, y: int, color: QColor) -> bool:
         row = mask[ry]
         for j in np.flatnonzero(seen):
             row[int(s[j]):int(e[j]) + 1] = True
+    return mask
+
+
+def flood_fill(img: QImage, x: int, y: int, color: QColor) -> bool:
+    """4-connected fill of the area of the clicked colour around (x, y), anti-aliased rim included.
+
+    Colours within FILL_TOLERANCE count as the clicked one, so specks left by rounding on soft
+    edges do not survive the next fill."""
+    if not (0 <= x < img.width() and 0 <= y < img.height()):
+        return False
+    new = np.uint32(0xFF000000 | (color.rgb() & 0xFFFFFF))
+    a = pixels(img)
+    target = a[y, x]
+    if target == new:
+        return False
+    mask = flood_region(a, x, y, FILL_TOLERANCE)
     _fill_soft_edge(a, mask, target, new)
     a[mask] = new
     return True
@@ -136,8 +156,10 @@ EDGE_SEARCH = 3     # radius of the window searched for the edge's solid colour
 
 
 def _rgb(v):
+    """(..., 4) float array of the premultiplied A, R, G, B channels."""
     v = np.asarray(v, dtype=np.uint32)
-    return np.stack([(v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF], axis=-1).astype(np.float32)
+    return np.stack([(v >> 24) & 0xFF, (v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF],
+                    axis=-1).astype(np.float32)
 
 
 def _fill_soft_edge(a, mask, target, new):
@@ -234,11 +256,12 @@ def _fill_soft_edge(a, mask, target, new):
         return
     out = c[ok] + share[ok, None] * (_rgb(new) - t)
     out = np.clip(np.rint(out), 0, 255).astype(np.int32)
+    out[:, 1:] = np.minimum(out[:, 1:], out[:, :1])     # stay valid premultiplied ARGB
     nc = _rgb(new).astype(np.int32)
     near_new = (np.abs(out - nc) <= SNAP).all(axis=-1)
     out[near_new] = nc
     out = out.astype(np.uint32)
-    a[py[ok], px[ok]] = (np.uint32(0xFF000000) | (out[:, 0] << 16) | (out[:, 1] << 8) | out[:, 2])
+    a[py[ok], px[ok]] = (out[:, 0] << 24) | (out[:, 1] << 16) | (out[:, 2] << 8) | out[:, 3]
 
 
 # ------------------------------------------------------------ BMP writing --
@@ -340,17 +363,44 @@ def _lzw(data: bytes, min_code=8) -> bytes:
     return bytes(out)
 
 
+def _gif_indexed(img: QImage):
+    """(index array h x w, colour table of 256, transparent index or None) for a GIF."""
+    w, h = img.width(), img.height()
+    clear = None
+    if img.hasAlphaChannel():
+        a = const_pixels(img.convertToFormat(ALPHA_FMT))
+        clear = (a >> 24) < 128
+        if not clear.any():
+            clear = None
+    if clear is None:
+        m = img.convertToFormat(QImage.Format_Indexed8, Qt.ThresholdDither | Qt.AvoidDither)
+        table = list(m.colorTable())
+        idx = np.frombuffer(m.constBits(), np.uint8).reshape(h, m.bytesPerLine())[:, :w].copy()
+        return idx, table + [0] * (256 - len(table)), None
+    # 255 colours for the picture, index 255 for see-through pixels
+    solid = flatten(img)
+    m = solid.convertToFormat(QImage.Format_Indexed8, Qt.ThresholdDither | Qt.AvoidDither)
+    table = list(m.colorTable())
+    idx = np.frombuffer(m.constBits(), np.uint8).reshape(h, m.bytesPerLine())[:, :w].copy()
+    if len(table) > 255:
+        m = solid.convertToFormat(QImage.Format_Indexed8, table[:255], Qt.ThresholdDither | Qt.AvoidDither)
+        table = list(m.colorTable())
+        idx = np.frombuffer(m.constBits(), np.uint8).reshape(h, m.bytesPerLine())[:, :w].copy()
+    table = table + [0] * (256 - len(table))
+    idx[clear] = 255
+    return idx, table, 255
+
+
 def _gif_bytes(img: QImage) -> bytes:
     w, h = img.width(), img.height()
-    m = img.convertToFormat(QImage.Format_Indexed8, Qt.ThresholdDither | Qt.AvoidDither)
-    table = list(m.colorTable())
-    table += [0] * (256 - len(table))
-    bpl = m.bytesPerLine()
-    idx = np.frombuffer(m.constBits(), np.uint8).reshape(h, bpl)[:, :w].tobytes()
+    idx_arr, table, clear = _gif_indexed(img)
+    idx = idx_arr.tobytes()
     out = bytearray(b"GIF89a")
     out += struct.pack("<HHBBB", w, h, 0xF7, 0, 0)
     for c in table[:256]:
         out += bytes(((c >> 16) & 255, (c >> 8) & 255, c & 255))
+    if clear is not None:
+        out += b"\x21\xF9\x04" + struct.pack("<BHB", 0x01, 0, clear) + b"\x00"
     out += b"\x2C" + struct.pack("<HHHHB", 0, 0, w, h, 0)
     out.append(8)
     comp = _lzw(idx, 8)
@@ -364,11 +414,20 @@ def _gif_bytes(img: QImage) -> bytes:
 
 def reduce_colors(img: QImage, fmt: str) -> QImage:
     """What the picture looks like after a round trip through a lossy format."""
+    if fmt != "gif":
+        img = flatten(img)
     if fmt == "bmp1":
         m = img.convertToFormat(QImage.Format_Mono, Qt.MonoOnly | Qt.ThresholdDither | Qt.AvoidDither)
     elif fmt == "bmp4":
         m = img.convertToFormat(QImage.Format_Indexed8, [0xFF000000 | c for c in VGA16],
                                 Qt.ThresholdDither | Qt.AvoidDither)
+    elif fmt == "gif" and has_transparency(img):
+        idx, table, clear = _gif_indexed(img)
+        lut = np.array([0xFF000000 | (c & 0xFFFFFF) for c in table], dtype=np.uint32)
+        lut[clear] = 0
+        out = QImage(img.width(), img.height(), ALPHA_FMT)
+        pixels(out)[:] = lut[idx]
+        return out
     elif fmt in ("bmp8", "gif"):
         m = img.convertToFormat(QImage.Format_Indexed8, Qt.ThresholdDither | Qt.AvoidDither)
     else:
@@ -378,6 +437,8 @@ def reduce_colors(img: QImage, fmt: str) -> QImage:
 
 def save_image(img: QImage, path: str, fmt: str) -> None:
     """Write img to path in the given format key; raises OSError on failure."""
+    if fmt in ("bmp1", "bmp4", "bmp8", "bmp24", "jpeg"):
+        img = flatten(img)          # these formats cannot keep see-through areas
     if fmt in ("bmp1", "bmp4", "bmp8", "bmp24"):
         data = _bmp_bytes(img, {"bmp1": 1, "bmp4": 4, "bmp8": 8, "bmp24": 24}[fmt])
         with open(path, "wb") as f:
@@ -393,7 +454,12 @@ def save_image(img: QImage, path: str, fmt: str) -> None:
         w.setQuality(92)
     elif fmt == "tiff":
         w.setCompression(1)        # LZW
-    out = img.convertToFormat(QImage.Format_RGB888) if fmt != "png" else img
+    if fmt == "png":
+        out = img
+    elif img.hasAlphaChannel():
+        out = img.convertToFormat(QImage.Format_ARGB32)
+    else:
+        out = img.convertToFormat(QImage.Format_RGB888)
     out.setDotsPerMeterX(3780)
     out.setDotsPerMeterY(3780)
     if not w.write(out):
@@ -407,8 +473,9 @@ def load_image(path: str) -> QImage:
     img = r.read()
     if img.isNull():
         raise OSError(r.errorString() or "This is not a valid bitmap file, or its format is not currently supported.")
-    return flatten(img.convertToFormat(QImage.Format_ARGB32_Premultiplied)
-                   if img.hasAlphaChannel() else img.convertToFormat(QImage.Format_RGB32))
+    if has_transparency(img):
+        return img.convertToFormat(ALPHA_FMT)
+    return flatten(img.convertToFormat(ALPHA_FMT) if img.hasAlphaChannel() else img.convertToFormat(QImage.Format_RGB32))
 
 
 class Document(QObject):
@@ -444,6 +511,32 @@ class Document(QObject):
 
     def title(self):
         return os.path.basename(self.path) if self.path else "Untitled"
+
+    @property
+    def transparent(self):
+        """The picture has a see-through background (erasing and deleting clear to transparent)."""
+        return self.image.format() == ALPHA_FMT
+
+    def conform(self, img: QImage, bg=QColor(255, 255, 255)) -> QImage:
+        """img in the picture's pixel format: kept see-through if the picture is, else flattened."""
+        if self.transparent:
+            return img if img.format() == ALPHA_FMT else img.convertToFormat(ALPHA_FMT)
+        return flatten(img, bg)
+
+    def blank(self, w, h, bg: QColor) -> QImage:
+        """A new empty image in the picture's format: transparent, or filled with bg."""
+        img = QImage(w, h, ALPHA_FMT if self.transparent else QImage.Format_RGB32)
+        img.fill(0 if self.transparent else bg)
+        return img
+
+    def set_transparent(self, on: bool, bg=QColor(255, 255, 255)):
+        """Switch the see-through background on or off (undoable)."""
+        if bool(on) == self.transparent:
+            return
+        self.push_undo()
+        old = self.image.size()
+        self.image = self.image.convertToFormat(ALPHA_FMT) if on else flatten(self.image, bg)
+        self._emit(old)
 
     # -- history -----------------------------------------------------------
     def push_undo(self):
@@ -499,10 +592,10 @@ class Document(QObject):
             self.sizeChanged.emit()
         self.changed.emit()
 
-    def set_image(self, img: QImage):
-        """Replace pixels (caller has already pushed undo)."""
+    def set_image(self, img: QImage, bg=QColor(255, 255, 255)):
+        """Replace pixels (caller has already pushed undo), keeping the picture's format."""
         old = self.image.size()
-        self.image = flatten(img)
+        self.image = self.conform(img, bg)
         self._emit(old)
 
     def resize_canvas(self, w, h, bg: QColor):
@@ -510,8 +603,7 @@ class Document(QObject):
         if w == self.width() and h == self.height():
             return
         self.push_undo()
-        img = QImage(w, h, QImage.Format_RGB32)
-        img.fill(bg)
+        img = self.blank(w, h, bg)
         p = QPainter(img)
         p.drawImage(0, 0, self.image)
         p.end()
@@ -542,6 +634,23 @@ class Document(QObject):
         self.fmt = format_for_path(path)
         self.modified = False
         self._stat()
+        self.historyChanged.emit()
+        self.sizeChanged.emit()
+        self.changed.emit()
+        self.fileChanged.emit()
+
+    def restore(self, img: QImage, path, fmt):
+        """Bring back a picture from a recovery copy: unsaved, tied to its original file if any."""
+        self.image = img.convertToFormat(ALPHA_FMT) if has_transparency(img) else flatten(img)
+        self.undo_stack.clear()
+        self.redo_stack.clear()
+        self.path = os.path.abspath(path) if path else None
+        self.fmt = fmt if fmt in FORMAT_BY_KEY else "png"
+        self.modified = True
+        self.file_size = None
+        self.saved_at = None
+        if self.path and os.path.exists(self.path):
+            self._stat()
         self.historyChanged.emit()
         self.sizeChanged.emit()
         self.changed.emit()

@@ -30,6 +30,8 @@ packaged build and refuses to archive a build that fails.
 - `ribbon.py`: custom-painted widgets placed by hand (no layouts) so the metrics stay fixed.
   `mainwindow.py` builds the tabs and wires commands; `refresh()` updates every enabled/checked state.
 - `chrome.py`: the frameless window's title bar (holds the quick access toolbar), status bar, rulers.
+- `colordialog.py` Edit Colors, `helpwindow.py` Help, `keytips.py` Alt key tips, `recovery.py`
+  autosave and crash recovery, `scanner.py` From scanner or camera.
 
 ## Things learned the hard way
 
@@ -63,11 +65,30 @@ packaged build and refuses to archive a build that fails.
   clicked one, snaps rim results near the fill colour to it exactly, takes rim pixels within `NEAR`
   of the clicked colour whole, and reaches 4 px (a size-1 brush's soft fade is that wide). When
   testing with a drawn loop, make sure the loop actually closes or the fill leaks for real.
+- **Never hand `doc.image` to Qt as a paint device that outlives it.** The text tool used
+  `documentLayout().setPaintDevice(doc.image)`; when the text box closed, PySide deleted the
+  picture's C++ object if it had been made by `convertToFormat` (every opened file, every
+  transparent picture), and everything after failed with "Internal C++ object already deleted".
+  It now measures against its own 1x1 image with the picture's DPI.
+- Transparency: the picture is see-through exactly when `doc.image` is
+  `Format_ARGB32_Premultiplied` (`doc.transparent`); otherwise it is `RGB32`. Undo snapshots carry
+  the format, so undo restores it. Create pictures with `doc.blank()` and pass replacements through
+  `doc.set_image()` (which calls `doc.conform()`); never build an `RGB32` picture directly.
+  `_fill_soft_edge` works on all four premultiplied channels, so filling over clear pixels blends
+  the stroke rim over the fill colour.
+- Magic wand selections are `Selection.mask` (bool array, local coordinates) instead of a path;
+  `_mask_image()`, `_erase_area()` and `doc_mask()` handle both kinds.
+- Crash recovery (`recovery.py`): a killed process can stay a zombie for a while and its pid can be
+  reused, so "is it still running" reads `/proc/<pid>/stat` and `cmdline`. Set
+  `OPENDRAW7_AUTOSAVE_MS` to test it quickly (kill -9, relaunch).
+- Key tips (`keytips.py`) are an application event filter plus a transparent overlay. Tab-opening
+  tips run immediately (not deferred) so a fast second letter already sees the tab's tips.
 - The app sets `QT_QPA_PLATFORM=xcb;wayland` on Linux because the custom title bar was only tested
   on X11. Native Wayland is untested.
 
 ## Known gaps (also listed in the README)
 
 Not measured against a real copy of the original, so metrics and colours are from memory. Artistic
-brushes and shape media are approximations. No Alt key tips. Scanner import is disabled. Dialogs
-are Qt's. Rulers are pixel-only.
+brushes and shape media are approximations. Open/save/print dialogs are Qt's. Rulers are
+pixel-only. Webcam capture is untested on real hardware (only the ffmpeg command was checked).
+Key tips do not reach into popup galleries (brushes, sizes) once they are open.

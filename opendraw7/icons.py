@@ -569,6 +569,38 @@ def _(p):
     p.drawPath(path)
 
 
+def _wand(p, k):
+    """Magic wand: a dark stick with a gold star at its tip; k scales the 16px drawing."""
+    p.save()
+    p.scale(k, k)
+    p.setPen(pen("#1d1d1d", 2.4, cap=Qt.RoundCap))
+    p.drawLine(QPointF(2.5, 13.5), QPointF(9.2, 6.8))
+    p.setPen(pen("#f4f4f4", 0.9, cap=Qt.FlatCap))
+    p.drawLine(QPointF(7.4, 8.6), QPointF(8.6, 7.4))
+    star = QPainterPath()
+    cx, cy, r1, r2 = 11.2, 4.8, 4.2, 1.7
+    for i in range(10):
+        a = -math.pi / 2 + i * math.pi / 5
+        r = r1 if i % 2 == 0 else r2
+        pt = QPointF(cx + r * math.cos(a), cy + r * math.sin(a))
+        star.moveTo(pt) if i == 0 else star.lineTo(pt)
+    star.closeSubpath()
+    p.setPen(pen("#a86c00", 0.8, join=Qt.MiterJoin))
+    p.setBrush(lg(0, 1, 0, 9, (0, "#fff4a8"), (1, "#f2b310")))
+    p.drawPath(star)
+    p.restore()
+
+
+@icon_fn("sel_wand")
+def _(p):
+    _wand(p, 1.0)
+
+
+@icon_fn("select_wand32", 32)
+def _(p):
+    _wand(p, 2.0)
+
+
 @icon_fn("sel_all")
 def _(p):
     _dashed_rect(p, QRectF(1.5, 1.5, 13, 13), fill=QColor("#bcd8f6"))
@@ -908,6 +940,18 @@ def _(p):
     p.drawRect(QRectF(3.5, 5.5, 25, 21))
     _letter(p, "100", QRectF(6, 9.5, 20, 9), "#1c4a9a", family=("DejaVu Sans", "Liberation Sans", "sans-serif"))
     _letter(p, "%", QRectF(12.5, 19.5, 7, 5), "#56677a", family=("DejaVu Sans", "Liberation Sans", "sans-serif"))
+
+
+@icon_fn("zoomfit32", 32)
+def _(p):
+    p.setPen(pen(PAGE_EDGE, 1, join=Qt.MiterJoin))
+    p.setBrush(lg(0, 3, 0, 29, (0, "#ffffff"), (1, "#dfe9f6")))
+    p.drawRect(QRectF(3.5, 5.5, 25, 21))
+    _picture(p, QRectF(9, 11, 14, 10))
+    p.setPen(pen("#1c4a9a", 1.6, cap=Qt.FlatCap, join=Qt.MiterJoin))
+    p.setBrush(Qt.NoBrush)
+    for (x, y, dx, dy) in ((6, 8, 1, 1), (26, 8, -1, 1), (6, 24, 1, -1), (26, 24, -1, -1)):
+        p.drawPolyline(poly(x, y + 4 * dy, x, y, x + 4 * dx, y))
 
 
 @icon_fn("fullscreen32", 32)

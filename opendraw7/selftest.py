@@ -7,7 +7,7 @@ import os
 import tempfile
 import traceback
 
-from PySide6.QtCore import QPointF, QRect, QSize
+from PySide6.QtCore import QPoint, QPointF, QRect, QSize
 from PySide6.QtGui import QColor, QImage, QPainter, QGuiApplication
 
 
@@ -27,6 +27,7 @@ def run(app) -> int:
     st, c, doc = win.state, win.canvas, win.doc
     failures = []
     count = 0
+    tmp = tempfile.mkdtemp(prefix="opendraw7-selftest-")
 
     def step(name, fn):
         nonlocal count
@@ -103,6 +104,47 @@ def run(app) -> int:
 
     step("flood fill", lambda: flood_fill(doc.image, 700, 500, QColor(10, 200, 90)))
 
+    def wand_and_clear():
+        st.set_tool("select")
+        c.select_tool.wand(QPoint(5, 5))
+        assert c.select_tool.sel is not None
+        c.select_tool.invert()
+        c.commit_pending()
+        doc.set_transparent(True)
+        c.select_tool.wand(QPoint(5, 5))
+        c.delete_selection()
+        assert doc.transparent
+        out = os.path.join(tmp, "clear.gif")
+        save_image(doc.image, out, "gif")
+        assert load_image(out).hasAlphaChannel()
+        win.grab()
+        doc.set_transparent(False)
+        st.set_tool("brush")
+    step("magic wand and transparency", wand_and_clear)
+
+    def extras():
+        from .helpwindow import HelpWindow
+        from .scanner import AcquireDialog
+        from .recovery import AutoSaver
+        h = HelpWindow(win)
+        h.search.setText("wand")
+        h.grab()
+        h.deleteLater()
+        AcquireDialog(win).deleteLater()
+        saver = AutoSaver(win, interval=10 ** 9, folder=tmp)
+        doc.push_undo()
+        doc.changed.emit()
+        assert saver.save_now(wait=True)
+        saver.clear()
+        saver.timer.stop()
+        win.keytips.show(1)
+        win.keytips.show(2, win.home_idx)
+        win.grab()
+        win.keytips.hide()
+        c.zoom_to_fit()
+        c.set_zoom(1.0)
+    step("help, devices, autosave, key tips, fit", extras)
+
     def text():
         st.set_tool("text")
         c.text_tool._create(QRect(40, 300, 260, 40))
@@ -139,7 +181,6 @@ def run(app) -> int:
         c.redo()
     step("whole-picture transforms and undo", whole_picture)
 
-    tmp = tempfile.mkdtemp(prefix="opendraw7-selftest-")
     for key, _label, exts in FORMATS:
         def fmt(k=key, e=exts[0]):
             path = os.path.join(tmp, f"t_{k}.{e}")
@@ -166,13 +207,12 @@ def run(app) -> int:
     step("menus and galleries", menus)
 
     def dialogs():
-        from PySide6.QtWidgets import QColorDialog, QFileDialog
-        for d in (ResizeSkewDialog(QSize(800, 600), win), PropertiesDialog(doc, win), AboutDialog(win)):
+        from PySide6.QtWidgets import QFileDialog
+        from .colordialog import EditColorsDialog
+        for d in (ResizeSkewDialog(QSize(800, 600), win), PropertiesDialog(doc, win), AboutDialog(win),
+                  EditColorsDialog(QColor(1, 2, 3), [], win)):
             d.grab()
             d.deleteLater()
-        cd = QColorDialog(QColor(1, 2, 3), win)
-        cd.setOption(QColorDialog.DontUseNativeDialog, True)
-        cd.deleteLater()
         fd = QFileDialog(win, "Save As", tmp)
         fd.deleteLater()
     step("dialogs", dialogs)

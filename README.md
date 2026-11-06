@@ -41,11 +41,20 @@ python run.py        # or: pip install . && opendraw7
 - **Shapes**: all 23 (line, curve, oval, rectangle, rounded rectangle, polygon, triangles, diamond,
   pentagon, hexagon, arrows, stars, callouts, heart, lightning) with the seven outline and fill
   styles. A shape stays adjustable (move, resize, recolor) until you click away.
-- **Selections**: rectangular and free-form, move, Ctrl-drag to copy, resize by the handles,
+- **Selections**: rectangular, free-form and magic wand (Shift+click adds), move, Ctrl-drag to copy,
+  Shift-drag to leave a trail, resize by the handles,
   transparent selection, select all, invert selection, crop, delete.
 - **Image**: resize and skew, rotate and flip, invert color, canvas resize by its handles,
   image properties.
-- **View**: zoom from 12.5% to 800%, rulers, gridlines, thumbnail, full screen.
+- **View**: zoom from 12.5% to 800%, fit to window, Ctrl+wheel zoom, rulers, gridlines, thumbnail,
+  full screen.
+- **Transparent backgrounds** (Image Properties): the eraser, Delete and Cut leave see-through areas,
+  shown as a checkerboard; PNG, GIF and TIFF keep them.
+- **Edit Colors** window like the original: basic and custom colors, spectrum, Hue/Sat/Lum and RGB.
+- **Key tips**: press Alt (or F10) to show letters on the ribbon and use it from the keyboard.
+- **Help** window with search (F1).
+- **From scanner or camera** through the SANE tools (`scanimage`) and `ffmpeg`.
+- **Crash recovery**: unsaved work is kept every two minutes and offered back after a crash.
 - **Files**: PNG, JPEG, BMP (monochrome, 16-color, 256-color, 24-bit), GIF, TIFF; ICO and WebP can
   be opened. Recent pictures, drag a file onto the window to open it, print, page setup and print
   preview, send in e-mail, set as desktop background.
@@ -63,7 +72,10 @@ python run.py        # or: pip install . && opendraw7
 | Ctrl+R, Ctrl+G | Rulers, gridlines |
 | Ctrl+PgUp / PgDn | Zoom in, out |
 | Ctrl++ / Ctrl+- | Thicker, thinner line |
+| Ctrl+0 | Fit to window |
 | F11 | Full screen |
+| F1 | Help |
+| Alt, F10 | Key tips |
 | Ctrl+F1 | Minimize the ribbon |
 | Shift while drawing | Squares, circles, 45° lines |
 | Esc | Cancel the shape, text box or selection in progress |
@@ -80,10 +92,10 @@ against a running copy, so do not expect a pixel-for-pixel match.
   approximations of the originals' textures.
 - **Window frame**: OpenDraw7 draws its own title bar so the quick access toolbar can sit in it.
   Start with `--native-frame` to use the desktop's title bar instead.
-- **Dialogs** (open, save, print, edit colors) are the Qt or desktop ones.
-- **From scanner or camera** is present but disabled.
-- **Help** opens the About box.
-- **Keyboard key tips** (pressing Alt to show letters on the ribbon) are not implemented.
+- **Dialogs** (open, save, print) are the Qt or desktop ones; Edit Colors is rebuilt.
+- **Help** text is written for OpenDraw7; the original's help is copyrighted.
+- **Additions** the original does not have: magic wand, transparent backgrounds, fit to window,
+  crash recovery.
 
 On Wayland desktops OpenDraw7 runs through XWayland by default, because that is where the custom
 title bar has been tested. Set `QT_QPA_PLATFORM=wayland` to try native Wayland.

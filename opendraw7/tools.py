@@ -1,13 +1,17 @@
 """Canvas tools. Each tool owns its in-progress object and knows how to commit it."""
 import math
-from PySide6.QtCore import Qt, QPoint, QPointF, QRect, QRectF, QSize, QTimer
+from PySide6.QtCore import Qt, QPoint, QPointF, QRect, QRectF, QSize, QTimer, QLine
 from PySide6.QtGui import (QImage, QPainter, QColor, QPen, QBrush, QPainterPath, QPolygonF, QCursor,
                            QTextDocument, QTextCursor, QTextCharFormat, QFont, QTextOption,
                            QAbstractTextDocumentLayout, QPalette, QGuiApplication, QTransform)
 
 from . import icons
 from .brushes import make_stroke, PencilStroke, ReplaceStroke, render_shape
-from .document import flood_fill, pixels, flatten
+import numpy as np
+
+from .document import flood_fill, flood_region, pixels, const_pixels, ALPHA_FMT
+
+WAND_TOLERANCE = 32         # per-channel difference the magic wand still treats as the same colour
 from .shapes import shape_path, is_curved
 
 L, R = Qt.LeftButton, Qt.RightButton
@@ -175,7 +179,7 @@ class FreehandTool(Tool):
         img = c.doc.image
         size = st.size()
         if self.kind == "eraser":
-            self.stroke = (PencilStroke(img, st.color2, size) if left
+            self.stroke = (PencilStroke(img, st.color2, size, clear=c.doc.transparent) if left
                            else ReplaceStroke(img, st.color2, size, st.color1))
         elif self.kind == "pencil":
             self.stroke = PencilStroke(img, st.color1 if left else st.color2, size)
@@ -224,7 +228,7 @@ class FreehandTool(Tool):
         off = n // 2
         pos = self.c.hover.pos
         vr = self.c.view_rect(QRect(pos.x() - off, pos.y() - off, n, n))
-        p.fillRect(vr, self.c.state.color2)
+        p.fillRect(vr, QColor(255, 255, 255) if self.c.doc.transparent else self.c.state.color2)
         p.setPen(QPen(QColor(0, 0, 0), 1))
         p.setBrush(Qt.NoBrush)
         p.drawRect(vr.adjusted(0, 0, -1, -1))
@@ -259,7 +263,10 @@ class PickerTool(Tool):
     def _pick(self, ev):
         if ev.buttons & (L | R) or ev.button in (L, R):
             col = self.c.color_at(ev.pos)
+            if col is not None and col.alpha() == 0:
+                col = None
             if col is not None:
+                col.setAlpha(255)
                 which = 1 if (ev.button == L or ev.buttons & L) else 2
                 self.c.state.set_color(which, col)
 
@@ -312,11 +319,56 @@ class MagnifierTool(Tool):
 
 # ---------------------------------------------------------------- selection --
 class Selection:
-    def __init__(self, rect: QRect, path=None, image=None):
+    def __init__(self, rect: QRect, path=None, image=None, mask=None):
         self.rect = QRect(rect)
         self.path = path          # QPainterPath in local coords, or None for the whole rect
+        self.mask = mask          # bool array (h, w) in local coords (magic wand), or None
         self.image = image        # lifted pixels (ARGB premultiplied) or None
         self.version = 0
+        self._edges = None
+
+    def shaped(self):
+        return self.path is not None or self.mask is not None
+
+    def edges(self):
+        """Outline of a mask selection as (x0, y0, x1, y1) segments in picture coordinates."""
+        if self._edges is None:
+            self._edges = mask_edges(self.mask, self.rect.left(), self.rect.top()) if self.mask is not None else []
+        return self._edges
+
+
+def mask_edges(m, ox=0, oy=0, limit=60000):
+    """Boundary segments between selected and unselected pixels, merged into runs."""
+    h, w = m.shape
+    pad = np.zeros((h + 2, w + 2), dtype=bool)
+    pad[1:-1, 1:-1] = m
+    segs = []
+    hor = pad[1:, 1:-1] != pad[:-1, 1:-1]          # (h+1, w): edge above row y
+    ver = pad[1:-1, 1:] != pad[1:-1, :-1]          # (h, w+1): edge left of column x
+    for y in np.flatnonzero(hor.any(axis=1)):
+        d = np.diff(np.concatenate(([0], hor[y].view(np.int8), [0])))
+        for a, b in zip(np.flatnonzero(d == 1), np.flatnonzero(d == -1)):
+            segs.append((ox + int(a), oy + int(y), ox + int(b), oy + int(y)))
+        if len(segs) > limit:
+            return []
+    for x in np.flatnonzero(ver.any(axis=0)):
+        col = ver[:, x]
+        d = np.diff(np.concatenate(([0], col.view(np.int8), [0])))
+        for a, b in zip(np.flatnonzero(d == 1), np.flatnonzero(d == -1)):
+            segs.append((ox + int(x), oy + int(a), ox + int(x), oy + int(b)))
+        if len(segs) > limit:
+            return []
+    return segs
+
+
+def path_mask(path: QPainterPath, w: int, h: int):
+    """Rasterise a local-coordinate path to a bool mask."""
+    img = QImage(w, h, ALPHA_FMT)
+    img.fill(0)
+    p = QPainter(img)
+    p.fillPath(path, QColor(255, 255, 255))
+    p.end()
+    return (const_pixels(img) >> 24) >= 128
 
 
 class SelectTool(Tool):
@@ -352,10 +404,47 @@ class SelectTool(Tool):
         self.c.stateChanged.emit()
         self.c.invalidate()
 
-    def set_selection(self, rect, path=None, image=None):
-        self.sel = Selection(rect, path, image)
+    def set_selection(self, rect, path=None, image=None, mask=None):
+        self.sel = Selection(rect, path, image, mask)
         self.mode = None
         self._notify()
+
+    def _mask_image(self, s) -> QImage:
+        """White where the (not yet lifted) selection is, clear elsewhere; local coordinates."""
+        r = s.rect
+        img = QImage(r.size(), ALPHA_FMT)
+        img.fill(0)
+        if s.mask is not None:
+            pixels(img)[s.mask] = np.uint32(0xFFFFFFFF)
+        else:
+            p = QPainter(img)
+            p.fillPath(self._local_path(), QColor(255, 255, 255))
+            p.end()
+        return img
+
+    def _erase_area(self, s):
+        """Fill the selected area of the picture with color 2, or clear it on a transparent picture."""
+        doc = self.c.doc
+        if s.mask is not None:
+            r = s.rect.intersected(doc.rect())
+            if r.isEmpty():
+                return
+            m = s.mask[r.top() - s.rect.top():r.bottom() + 1 - s.rect.top(),
+                       r.left() - s.rect.left():r.right() + 1 - s.rect.left()]
+            col = self.c.state.color2
+            val = np.uint32(0) if doc.transparent else np.uint32(0xFF000000 | (col.rgb() & 0xFFFFFF))
+            pixels(doc.image)[r.top():r.bottom() + 1, r.left():r.right() + 1][m] = val
+            return
+        p = QPainter(doc.image)
+        p.translate(s.rect.topLeft())
+        if doc.transparent:
+            p.setCompositionMode(QPainter.CompositionMode_Clear)
+        p.fillPath(self._local_path(), self.c.state.color2)
+        p.end()
+
+    def _bg(self):
+        """Background for whole-selection images: None (see-through) on a transparent picture."""
+        return None if self.c.doc.transparent else self.c.state.color2
 
     def _local_path(self):
         s = self.sel
@@ -376,20 +465,12 @@ class SelectTool(Tool):
         img.fill(0)
         p = QPainter(img)
         p.drawImage(0, 0, doc.image, r.x(), r.y(), r.width(), r.height())
-        if s.path is not None:
-            mask = QImage(r.size(), QImage.Format_ARGB32_Premultiplied)
-            mask.fill(0)
-            mp = QPainter(mask)
-            mp.fillPath(s.path, QColor(255, 255, 255))
-            mp.end()
+        if s.shaped():
             p.setCompositionMode(QPainter.CompositionMode_DestinationIn)
-            p.drawImage(0, 0, mask)
+            p.drawImage(0, 0, self._mask_image(s))
         p.end()
         if not copy:
-            dp = QPainter(doc.image)
-            dp.translate(r.topLeft())
-            dp.fillPath(self._local_path(), self.c.state.color2)
-            dp.end()
+            self._erase_area(s)
         s.image = img
         s.version += 1
         self.c.invalidate()
@@ -417,6 +498,7 @@ class SelectTool(Tool):
         if s.image is not None and s.image.size() != s.rect.size():
             s.image = s.image.scaled(s.rect.size(), Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
             s.path = None
+            s.mask = None
             s.version += 1
 
     def composite(self):
@@ -455,6 +537,11 @@ class SelectTool(Tool):
         s = self.sel
         if s is None:
             return
+        if s.mask is not None or s.image is not None:
+            m = ~self.doc_mask()
+            self.commit()
+            self._select_mask(m)
+            return
         inner = QPainterPath(self._local_path())
         inner.translate(s.rect.left(), s.rect.top())
         self.commit()
@@ -467,35 +554,39 @@ class SelectTool(Tool):
         if s is None:
             return
         if s.image is None:
-            doc = self.c.doc
-            doc.push_undo()
-            p = QPainter(doc.image)
-            p.translate(s.rect.topLeft())
-            p.fillPath(self._local_path(), self.c.state.color2)
-            p.end()
+            self.c.doc.push_undo()
+            self._erase_area(s)
         self.sel = None
         self.mode = None
         self.c.doc.changed.emit()
         self._notify()
 
     def content(self, bg=QColor(255, 255, 255)) -> QImage:
-        """Opaque picture of what is selected."""
+        """Picture of what is selected, over bg (bg None: see-through background)."""
         s = self.sel
-        out = QImage(s.rect.size(), QImage.Format_RGB32)
-        out.fill(bg)
-        p = QPainter(out)
+        piece = QImage(s.rect.size(), ALPHA_FMT)
+        piece.fill(0)
+        p = QPainter(piece)
         if s.image is not None:
             p.drawImage(0, 0, self.floating())
         else:
-            if s.path is not None:
-                p.setClipPath(s.path)
             p.drawImage(0, 0, self.c.doc.image, s.rect.x(), s.rect.y(), s.rect.width(), s.rect.height())
+            if s.shaped():
+                p.setCompositionMode(QPainter.CompositionMode_DestinationIn)
+                p.drawImage(0, 0, self._mask_image(s))
+        p.end()
+        if bg is None:
+            return piece
+        out = QImage(s.rect.size(), QImage.Format_RGB32)
+        out.fill(bg)
+        p = QPainter(out)
+        p.drawImage(0, 0, piece)
         p.end()
         return out
 
     def copy(self):
         if self.sel is not None:
-            QGuiApplication.clipboard().setImage(self.content())
+            QGuiApplication.clipboard().setImage(self.content(None if self.c.doc.transparent else QColor(255, 255, 255)))
 
     def cut(self):
         if self.sel is not None:
@@ -507,7 +598,7 @@ class SelectTool(Tool):
         if s is None:
             return
         doc = self.c.doc
-        img = self.content(self.c.state.color2)
+        img = self.content(self._bg())
         r = QRect(s.rect)
         lifted = s.image is not None
         self.sel = None
@@ -517,7 +608,7 @@ class SelectTool(Tool):
         visible = r.intersected(doc.rect()) if not lifted else r
         if visible != r and not visible.isEmpty():
             img = img.copy(visible.translated(-r.topLeft()))
-        doc.set_image(img)
+        doc.set_image(img, self.c.state.color2)
         self._notify()
 
     def paste(self, img: QImage):
@@ -526,8 +617,7 @@ class SelectTool(Tool):
         img = img.convertToFormat(QImage.Format_ARGB32_Premultiplied)
         doc.push_undo()
         if img.width() > doc.width() or img.height() > doc.height():
-            big = QImage(max(img.width(), doc.width()), max(img.height(), doc.height()), QImage.Format_RGB32)
-            big.fill(c.state.color2)
+            big = doc.blank(max(img.width(), doc.width()), max(img.height(), doc.height()), c.state.color2)
             p = QPainter(big)
             p.drawImage(0, 0, doc.image)
             p.end()
@@ -547,9 +637,75 @@ class SelectTool(Tool):
         img = fn(s.image).convertToFormat(QImage.Format_ARGB32_Premultiplied)
         s.image = img
         s.path = None
+        s.mask = None
         s.rect = QRect(s.rect.topLeft(), img.size())
         s.version += 1
         self._notify()
+
+    # -- magic wand ------------------------------------------------------------
+    def doc_mask(self):
+        """Current selection as a picture-sized bool mask."""
+        d = self.c.doc
+        out = np.zeros((d.height(), d.width()), dtype=bool)
+        s = self.sel
+        if s is None:
+            return out
+        r = s.rect
+        if s.image is not None:
+            local = (const_pixels(self.floating().convertToFormat(ALPHA_FMT)) >> 24) > 0
+        elif s.mask is not None:
+            local = s.mask
+        elif s.path is not None:
+            local = path_mask(s.path, r.width(), r.height())
+        else:
+            local = np.ones((r.height(), r.width()), dtype=bool)
+        vis = r.intersected(d.rect())
+        if not vis.isEmpty():
+            out[vis.top():vis.bottom() + 1, vis.left():vis.right() + 1] = local[
+                vis.top() - r.top():vis.bottom() + 1 - r.top(), vis.left() - r.left():vis.right() + 1 - r.left()]
+        return out
+
+    def _select_mask(self, m):
+        """Select the pixels of a picture-sized mask (nothing if it is empty)."""
+        ys = np.flatnonzero(m.any(axis=1))
+        if not len(ys):
+            self.sel = None
+            self._notify()
+            return
+        xs = np.flatnonzero(m.any(axis=0))
+        y0, y1, x0, x1 = int(ys[0]), int(ys[-1]), int(xs[0]), int(xs[-1])
+        local = np.ascontiguousarray(m[y0:y1 + 1, x0:x1 + 1])
+        rect = QRect(x0, y0, x1 - x0 + 1, y1 - y0 + 1)
+        if local.all():
+            self.set_selection(rect)
+        else:
+            self.set_selection(rect, mask=local)
+
+    def wand(self, pos: QPoint, add=False):
+        """Select the area of similar colour around pos; with add, join it to the selection."""
+        d = self.c.doc
+        if not d.rect().contains(pos):
+            return
+        region = flood_region(const_pixels(d.image), pos.x(), pos.y(), WAND_TOLERANCE)
+        if add and self.sel is not None:
+            region |= self.doc_mask()
+        self.commit()
+        self._select_mask(region)
+
+    def _inside(self, pos):
+        s = self.sel
+        if not s.rect.contains(pos):
+            return False
+        if s.mask is not None and s.image is None:
+            return bool(s.mask[pos.y() - s.rect.top(), pos.x() - s.rect.left()])
+        return True
+
+    def _stamp(self):
+        """Leave a copy of the floating selection where it is now (Shift-drag trail)."""
+        s = self.sel
+        p = QPainter(self.c.doc.image)
+        p.drawImage(s.rect.topLeft(), self.floating())
+        p.end()
 
     # -- mouse ---------------------------------------------------------------
     def _outline(self):
@@ -572,9 +728,13 @@ class SelectTool(Tool):
                 self.mode, self.handle = "resize", h
                 self.start_rect, self.press_pos = QRect(s.rect), ev.pos
                 return
-            if s.rect.contains(ev.pos):
+            wand_add = self.c.state.sel_mode == "wand" and ev.shift and s.image is None
+            if self._inside(ev.pos) and not wand_add:
                 self.mode = "move"
                 self.start_rect, self.press_pos = QRect(s.rect), ev.pos
+                if ev.shift:
+                    self.lift()
+                    self._stamp()
                 if ev.ctrl:
                     if s.image is None:
                         self.lift(copy=True)
@@ -583,7 +743,11 @@ class SelectTool(Tool):
                         p.drawImage(s.rect.topLeft(), self.floating())
                         p.end()
                 return
-            self.commit()
+            if not wand_add:
+                self.commit()
+        if self.c.state.sel_mode == "wand":
+            self.wand(ev.pos, add=ev.shift)
+            return
         self.anchor = self._clamp(ev.pos)
         self.cur = QRect()
         if self.c.state.sel_mode == "free":
@@ -614,6 +778,8 @@ class SelectTool(Tool):
                 return
             self.lift()
             s.rect = self.start_rect.translated(d)
+            if ev.shift:
+                self._stamp()
             self.c.invalidate()
         elif self.mode == "resize":
             d = ev.pos - self.press_pos
@@ -687,9 +853,37 @@ class SelectTool(Tool):
             p.drawPolyline(QPolygonF(pts))
             p.restore()
         if self.sel is not None:
+            s = self.sel
+            if s.mask is not None and s.image is None:
+                self._paint_edges(p, s)
             o = self._outline()
             draw_dashed(p, o)
             draw_handles(p, handle_points(o))
+
+    def _paint_edges(self, p, s):
+        c = self.c
+        z = c.zoom
+        o = c.origin()
+        vp = c.viewport().rect().adjusted(-2, -2, 2, 2)
+        lines = []
+        for x0, y0, x1, y1 in s.edges():
+            a = QPoint(o.x() + int(round(x0 * z)), o.y() + int(round(y0 * z)))
+            b = QPoint(o.x() + int(round(x1 * z)), o.y() + int(round(y1 * z)))
+            if (max(a.x(), b.x()) < vp.left() or min(a.x(), b.x()) > vp.right()
+                    or max(a.y(), b.y()) < vp.top() or min(a.y(), b.y()) > vp.bottom()):
+                continue
+            lines.append(QLine(a, b))
+        if not lines:
+            return
+        p.save()
+        p.setRenderHint(QPainter.Antialiasing, False)
+        p.setPen(QPen(QColor(255, 255, 255), 1))
+        p.drawLines(lines)
+        pen = QPen(QColor(0, 0, 0), 1)
+        pen.setDashPattern([3, 3])
+        p.setPen(pen)
+        p.drawLines(lines)
+        p.restore()
 
     def cursor(self, ev):
         s = self.sel
@@ -697,7 +891,7 @@ class SelectTool(Tool):
             h = hit_handle(self._outline(), ev.view)
             if h is not None:
                 return QCursor(HANDLE_CURSORS[h])
-            if s.rect.contains(ev.pos):
+            if self._inside(ev.pos) and not (self.c.state.sel_mode == "wand" and ev.shift):
                 return QCursor(Qt.SizeAllCursor)
         return icons.cursor("cross")
 
@@ -1187,7 +1381,13 @@ class TextTool(Tool):
     def _create(self, rect: QRect):
         self.tdoc = QTextDocument()
         self.tdoc.setDocumentMargin(self.PAD)
-        self.tdoc.documentLayout().setPaintDevice(self.c.doc.image)
+        # Measure text against a small image of the picture's resolution, never the picture itself:
+        # the layout can take the paint device down with it when the text box closes.
+        img = self.c.doc.image
+        self._device = QImage(1, 1, QImage.Format_RGB32)
+        self._device.setDotsPerMeterX(img.dotsPerMeterX())
+        self._device.setDotsPerMeterY(img.dotsPerMeterY())
+        self.tdoc.documentLayout().setPaintDevice(self._device)
         opt = QTextOption()
         opt.setWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
         self.tdoc.setDefaultTextOption(opt)
