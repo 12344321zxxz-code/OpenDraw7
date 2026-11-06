@@ -51,6 +51,9 @@ class Canvas(QAbstractScrollArea):
         self.show_grid = False
         self.hover = None
         self._display = None
+        self._lkey = self._limg = None          # layered display cache (see _layered)
+        self._below = self._above = None
+        self._below_key = self._above_key = None
         self._resize = None             # [handle, QSize] while dragging a canvas handle
         self.setFrameShape(QFrame.NoFrame)
         self.viewport().setMouseTracking(True)
@@ -67,6 +70,7 @@ class Canvas(QAbstractScrollArea):
         }
         self.tool = self._tools[self._tool_key()]
         doc.changed.connect(self.invalidate)
+        doc.layersChanged.connect(self._layers_changed)
         doc.sizeChanged.connect(self._doc_resized)
         state.changed.connect(self._state_changed)
         self.horizontalScrollBar().setSingleStep(20)
@@ -148,6 +152,8 @@ class Canvas(QAbstractScrollArea):
 
     # -- display -------------------------------------------------------------
     def display_image(self) -> QImage:
+        """What the picture looks like now: the active layer with the tool's work in progress,
+        blended with the other visible layers."""
         if self._display is None:
             try:
                 comp = self.tool.composite()
@@ -156,7 +162,47 @@ class Canvas(QAbstractScrollArea):
                 comp = None
                 self._drop_pending()
             self._display = comp if comp is not None else self.doc.image
-        return self._display
+        if self.doc.single():
+            return self._display
+        return self._layered(self._display)
+
+    def _layered(self, active: QImage) -> QImage:
+        # The layers below and above the active one are blended once and kept until one of them
+        # changes; each repaint while drawing then costs three image draws, not one per layer.
+        d = self.doc
+        below = tuple((ly.image.cacheKey(), ly.visible, ly.opacity) for ly in d.layers[:d.active])
+        above = tuple((ly.image.cacheKey(), ly.visible, ly.opacity) for ly in d.layers[d.active + 1:])
+        cur = d.layer
+        key = (active.cacheKey(), cur.visible, cur.opacity, below, above, d.width(), d.height())
+        if key == self._lkey and self._limg is not None:
+            return self._limg
+        size = (d.width(), d.height())
+        if (below, size) != self._below_key:
+            self._below = d.composite(upto=d.active)
+            self._below_key = (below, size)
+        if (above, size) != self._above_key:
+            img = QImage(d.width(), d.height(), QImage.Format_ARGB32_Premultiplied)
+            img.fill(0)
+            p = QPainter(img)
+            for ly in d.layers[d.active + 1:]:
+                if ly.visible and ly.opacity > 0:
+                    p.setOpacity(ly.opacity)
+                    p.drawImage(0, 0, ly.image)
+            p.end()
+            self._above = img
+            self._above_key = (above, size)
+        out = QImage(self._below)
+        out = out.convertToFormat(QImage.Format_ARGB32_Premultiplied) if out.format() != \
+            QImage.Format_ARGB32_Premultiplied else out.copy()
+        p = QPainter(out)
+        if cur.visible and cur.opacity > 0:
+            p.setOpacity(cur.opacity)
+            p.drawImage(0, 0, active)
+        p.setOpacity(1.0)
+        p.drawImage(0, 0, self._above)
+        p.end()
+        self._lkey, self._limg = key, out
+        return out
 
     def _drop_pending(self):
         """Throw away whatever the tool has in progress after it failed."""
@@ -168,6 +214,9 @@ class Canvas(QAbstractScrollArea):
     def invalidate(self):
         self._display = None
         self.viewport().update()
+
+    def _layers_changed(self):
+        self.invalidate()
 
     def _doc_resized(self):
         self._update_scrollbars()
@@ -525,14 +574,18 @@ class Canvas(QAbstractScrollArea):
     def paste_from(self, path):
         self.paste_image(load_image(path))
 
-    def _apply(self, fn):
-        """Run an image transform on the selection, or on the whole picture."""
+    def _apply(self, fn, all_layers=True):
+        """Run an image transform on the selection, or on the whole picture (every layer, or just
+        the active one)."""
         if self.has_selection():
             self.select_tool.transform(fn)
         else:
             self.commit_pending()
-            self.doc.push_undo()
-            self.doc.set_image(fn(self.doc.image), self.state.color2)
+            if all_layers:
+                self.doc.transform_all(fn, self.state.color2)
+            else:
+                self.doc.push_undo()
+                self.doc.set_image(fn(self.doc.image), self.state.color2)
         self.stateChanged.emit()
 
     def rotate(self, kind):
@@ -577,7 +630,7 @@ class Canvas(QAbstractScrollArea):
             out = img.copy()
             out.invertPixels(QImage.InvertRgb)
             return out
-        self._apply(fn)
+        self._apply(fn, all_layers=False)
 
     def target_size(self) -> QSize:
         """Size that Resize/Skew will act on."""

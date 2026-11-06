@@ -63,7 +63,9 @@ def leftovers(folder=None):
         if not name.endswith(".json"):
             continue
         jpath = os.path.join(folder, name)
-        ppath = jpath[:-5] + ".png"
+        ppath = jpath[:-5] + ".ora"
+        if not os.path.exists(ppath):
+            ppath = jpath[:-5] + ".png"           # copies kept by 0.2.x
         try:
             with open(jpath, encoding="utf-8") as f:
                 meta = json.load(f)
@@ -92,7 +94,7 @@ class AutoSaver(QObject):
         self.win = win
         self.folder = folder or recovery_dir()
         stem = os.path.join(self.folder, f"{os.getpid()}")
-        self.png, self.json = stem + ".png", stem + ".json"
+        self.png, self.json = stem + ".ora", stem + ".json"     # the copy keeps every layer
         self._dirty = False
         self._thread = None
         win.doc.changed.connect(self._changed)
@@ -118,26 +120,27 @@ class AutoSaver(QObject):
             return False
         if self._thread is not None and self._thread.is_alive():
             return False
+        layers = [ly.copy() for ly in doc.layers]
         try:
-            img = QImage(self.win.canvas.display_image())     # includes a moved selection or new shape
+            comp = self.win.canvas.tool.composite()           # a moved selection or new shape, not yet in
+            if comp is not None:
+                layers[doc.active].image = QImage(comp)
         except Exception:
-            img = QImage(doc.image)
+            pass
         meta = {"pid": os.getpid(), "time": time.time(), "path": doc.path or "", "fmt": doc.fmt,
                 "title": doc.title()}
         self._dirty = False
-        self._thread = threading.Thread(target=self._write, args=(img, meta), daemon=True)
+        self._thread = threading.Thread(target=self._write, args=(layers, meta), daemon=True)
         self._thread.start()
         if wait:
             self._thread.join()
         return True
 
-    def _write(self, img, meta):
+    def _write(self, layers, meta):
+        from .document import save_ora
         try:
             os.makedirs(self.folder, exist_ok=True)
-            tmp = self.png + ".tmp"
-            if not img.save(tmp, "PNG"):
-                return
-            os.replace(tmp, self.png)
+            save_ora(layers, self.png)
             with open(self.json + ".tmp", "w", encoding="utf-8") as f:
                 json.dump(meta, f)
             os.replace(self.json + ".tmp", self.json)
@@ -170,8 +173,12 @@ def offer_restore(win, folder=None):
     if box.clickedButton() is not restore:
         discard(ppath, jpath)
         return False
-    img = QImage(ppath)
-    if img.isNull():
+    from .document import load_ora
+    try:
+        img = load_ora(ppath) if ppath.endswith(".ora") else QImage(ppath)
+    except OSError:
+        img = None
+    if img is None or (isinstance(img, QImage) and img.isNull()):
         discard(ppath, jpath)
         return False
     win.doc.restore(img, meta.get("path") or None, meta.get("fmt") or "png")

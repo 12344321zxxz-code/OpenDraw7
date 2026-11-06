@@ -601,6 +601,66 @@ def _(p):
     _wand(p, 2.0)
 
 
+def _sheet(p, x, y, fill="#ffffff", edge="#5b7aa6"):
+    """A layer sheet seen at a slant: a flat diamond-ish parallelogram."""
+    p.setPen(pen(edge, 1, join=Qt.MiterJoin))
+    p.setBrush(QColor(fill))
+    p.drawPolygon(poly(x + 4, y, x + 13, y, x + 9, y + 5, x, y + 5))
+
+
+def _layers_stack(p, top_fill="#ffffff", lower_fill="#c9daf0"):
+    _sheet(p, 1.5, 8.5, lower_fill, "#6d86a8")
+    _sheet(p, 1.5, 4.5, top_fill)
+
+
+@icon_fn("layer_new")
+def _(p):
+    _layers_stack(p, "#dff0d8")
+    p.setPen(pen("#2e8b2e", 2.2, cap=Qt.FlatCap))
+    p.drawLine(QPointF(12.5, 9), QPointF(12.5, 15))
+    p.drawLine(QPointF(9.5, 12), QPointF(15.5, 12))
+
+
+@icon_fn("layer_dup")
+def _(p):
+    _sheet(p, 1.5, 9.5, "#c9daf0", "#6d86a8")
+    _sheet(p, 1.5, 6.0, "#e4edf9", "#6d86a8")
+    _sheet(p, 1.5, 2.5)
+
+
+@icon_fn("layer_del")
+def _(p):
+    _layers_stack(p)
+    p.setPen(pen("#c42b1c", 2.0))
+    p.drawLine(QPointF(9.5, 9.5), QPointF(14.5, 14.5))
+    p.drawLine(QPointF(14.5, 9.5), QPointF(9.5, 14.5))
+
+
+@icon_fn("layer_up")
+def _(p):
+    _sheet(p, 0.5, 10.5, "#c9daf0", "#6d86a8")
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor("#2b6cc4"))
+    p.drawPolygon(poly(11.5, 1.5, 15.5, 6.5, 13, 6.5, 13, 11, 10, 11, 10, 6.5, 7.5, 6.5))
+
+
+@icon_fn("layer_down")
+def _(p):
+    _sheet(p, 0.5, 1.5, "#ffffff")
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor("#2b6cc4"))
+    p.drawPolygon(poly(11.5, 15, 15.5, 10, 13, 10, 13, 5.5, 10, 5.5, 10, 10, 7.5, 10))
+
+
+@icon_fn("layer_merge")
+def _(p):
+    _sheet(p, 1.5, 10.5, "#c9daf0", "#6d86a8")
+    _sheet(p, 1.5, 1.5)
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor("#2b6cc4"))
+    p.drawPolygon(poly(7.5, 11, 11, 7.5, 9, 7.5, 9, 5, 6, 5, 6, 7.5, 4, 7.5))
+
+
 @icon_fn("sel_all")
 def _(p):
     _dashed_rect(p, QRectF(1.5, 1.5, 13, 13), fill=QColor("#bcd8f6"))

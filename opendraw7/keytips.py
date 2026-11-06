@@ -112,7 +112,7 @@ class KeyTips(QObject):
                     ("SZ", win.size_btn), ("1", c1), ("2", c2), ("EC", edit)]
         elif idx == win.view_idx:
             spec = [("I", win.zoomin_btn), ("O", win.zoomout_btn), ("M", win.z100_btn), ("W", win.zfit_btn),
-                    ("R", win.rulers_chk), ("G", win.grid_chk), ("S", win.status_chk),
+                    ("R", win.rulers_chk), ("G", win.grid_chk), ("S", win.status_chk), ("L", win.layers_chk),
                     ("F", win.full_btn), ("T", win.thumb_btn)]
         else:
             spec = [("V", win.t_paste), ("X", win.t_cut), ("C", win.t_copy),

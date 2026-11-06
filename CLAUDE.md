@@ -30,6 +30,15 @@ packaged build and refuses to archive a build that fails.
 - `ribbon.py`: custom-painted widgets placed by hand (no layouts) so the metrics stay fixed.
   `mainwindow.py` builds the tabs and wires commands; `refresh()` updates every enabled/checked state.
 - `chrome.py`: the frameless window's title bar (holds the quick access toolbar), status bar, rulers.
+- Layers: `Document.layers` (bottom first) of `Layer(image, name, visible, opacity)`; `doc.image` is the
+  *active* layer, so every tool draws on it unchanged. `doc.transparent` means "the active layer is
+  see-through" (always for layers above the bottom one), `doc.background_transparent` is the bottom
+  layer (Image Properties). Undo snapshots the whole stack (`_State`). Whole-picture commands use
+  `transform_all`, `grow`, `crop_all`; saving to one-layer formats uses `doc.flattened()`.
+  `Canvas.display_image()` blends the layers and caches the ones below/above the active layer
+  (`_layered`), keyed on `QImage.cacheKey()`. `layerspane.py` is the pane; anything that switches or
+  changes layers must call `canvas.commit_pending()` first so a floating selection or shape lands on
+  the layer it was made on.
 - `colordialog.py` Edit Colors, `helpwindow.py` Help, `keytips.py` Alt key tips, `recovery.py`
   autosave and crash recovery, `scanner.py` From scanner or camera.
 

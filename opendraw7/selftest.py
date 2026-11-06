@@ -145,6 +145,25 @@ def run(app) -> int:
         c.set_zoom(1.0)
     step("help, devices, autosave, key tips, fit", extras)
 
+    def layers():
+        from .document import load_ora
+        win.set_layers_pane(True)
+        pane = win.layers_pane
+        pane.add()
+        pane.duplicate()
+        pane.move(-1)
+        doc.set_layer_props(1, opacity=0.5)
+        c.display_image()
+        win.grab()
+        out = os.path.join(tmp, "layers.ora")
+        doc.save(out, "ora")
+        assert len(load_ora(out)) == 3
+        pane.merge()
+        pane.flatten()
+        assert len(doc.layers) == 1
+        win.set_layers_pane(False)
+    step("layers and OpenRaster", layers)
+
     def text():
         st.set_tool("text")
         c.text_tool._create(QRect(40, 300, 260, 40))

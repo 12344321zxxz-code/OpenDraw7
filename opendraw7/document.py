@@ -31,11 +31,12 @@ FORMATS = [
     ("gif", "GIF (*.gif)", ["gif"]),
     ("tiff", "TIFF (*.tif *.tiff)", ["tif", "tiff"]),
     ("png", "PNG (*.png)", ["png"]),
+    ("ora", "OpenRaster - keeps layers (*.ora)", ["ora"]),
 ]
 FORMAT_BY_KEY = {k: (label, exts) for k, label, exts in FORMATS}
-OPEN_FILTER = ("All Picture Files (*.bmp *.dib *.jpg *.jpeg *.jpe *.jfif *.gif *.tif *.tiff *.png *.ico *.webp);;"
+OPEN_FILTER = ("All Picture Files (*.bmp *.dib *.jpg *.jpeg *.jpe *.jfif *.gif *.tif *.tiff *.png *.ico *.webp *.ora);;"
                "Bitmap Files (*.bmp *.dib);;JPEG (*.jpg *.jpeg *.jpe *.jfif);;GIF (*.gif);;"
-               "TIFF (*.tif *.tiff);;PNG (*.png);;ICO (*.ico);;All Files (*)")
+               "TIFF (*.tif *.tiff);;PNG (*.png);;OpenRaster (*.ora);;ICO (*.ico);;All Files (*)")
 LOSSY = {"bmp1", "bmp4", "bmp8", "gif"}
 
 
@@ -446,6 +447,9 @@ def reduce_colors(img: QImage, fmt: str) -> QImage:
 
 def save_image(img: QImage, path: str, fmt: str) -> None:
     """Write img to path in the given format key; raises OSError on failure."""
+    if fmt == "ora":
+        save_ora([Layer(img)], path)
+        return
     if fmt in ("bmp1", "bmp4", "bmp8", "bmp24", "jpeg"):
         img = flatten(img)          # these formats cannot keep see-through areas
     if fmt in ("bmp1", "bmp4", "bmp8", "bmp24"):
@@ -476,6 +480,10 @@ def save_image(img: QImage, path: str, fmt: str) -> None:
 
 
 def load_image(path: str) -> QImage:
+    """One picture from a file; a layered OpenRaster file comes back merged."""
+    if format_for_path(path, "") == "ora":
+        img = blend_layers(load_ora(path))
+        return img if has_transparency(img) else flatten(img)
     if QImageReader.allocationLimit() < 1024:
         QImageReader.setAllocationLimit(1024)     # Qt refuses images over 256 MB by default
     r = QImageReader(path)
@@ -489,16 +497,48 @@ def load_image(path: str) -> QImage:
     return flatten(img.convertToFormat(ALPHA_FMT) if img.hasAlphaChannel() else img.convertToFormat(QImage.Format_RGB32))
 
 
+class Layer:
+    """One layer: its pixels, name, visibility and opacity (0..1)."""
+    __slots__ = ("image", "name", "visible", "opacity")
+
+    def __init__(self, image: QImage, name="Background", visible=True, opacity=1.0):
+        self.image = image
+        self.name = name
+        self.visible = visible
+        self.opacity = opacity
+
+    def copy(self):
+        # QImage copies share their pixels until one of them is painted on
+        return Layer(QImage(self.image), self.name, self.visible, self.opacity)
+
+
+class _State:
+    """Everything undo restores: every layer and which one is active."""
+    __slots__ = ("layers", "active")
+
+    def __init__(self, layers, active):
+        self.layers = [ly.copy() for ly in layers]
+        self.active = active
+
+    def nbytes(self):
+        return sum(ly.image.sizeInBytes() for ly in self.layers)
+
+
 class Document(QObject):
+    """The picture: a stack of layers (bottom first). `image` is the active layer's pixels, so every
+    tool draws on the active layer. A picture with one layer behaves exactly like a plain picture."""
     changed = Signal()         # pixels changed
     sizeChanged = Signal()
     historyChanged = Signal()
     fileChanged = Signal()
+    layersChanged = Signal()   # layers added, removed, reordered, renamed, shown/hidden, or active changed
 
     def __init__(self, w=800, h=600, parent=None):
         super().__init__(parent)
-        self.image = QImage(w, h, QImage.Format_RGB32)
-        self.image.fill(QColor(255, 255, 255))
+        img = QImage(w, h, QImage.Format_RGB32)
+        img.fill(QColor(255, 255, 255))
+        self.layers = [Layer(img)]
+        self.active = 0
         self.undo_stack = []
         self.redo_stack = []
         self.path = None
@@ -506,6 +546,20 @@ class Document(QObject):
         self.modified = False
         self.file_size = None
         self.saved_at = None
+        self._layer_no = 1
+
+    # -- the active layer's pixels --------------------------------------------
+    @property
+    def image(self) -> QImage:
+        return self.layers[self.active].image
+
+    @image.setter
+    def image(self, img: QImage):
+        self.layers[self.active].image = img
+
+    @property
+    def layer(self) -> Layer:
+        return self.layers[self.active]
 
     # -- basic info --------------------------------------------------------
     def width(self):
@@ -525,33 +579,87 @@ class Document(QObject):
 
     @property
     def transparent(self):
-        """The picture has a see-through background (erasing and deleting clear to transparent)."""
+        """The active layer is see-through: erasing and deleting on it clear to transparent.
+        (Always true for layers above the background.)"""
         return self.image.format() == ALPHA_FMT
 
+    @property
+    def background_transparent(self):
+        """The bottom layer has a see-through background (Image Properties)."""
+        return self.layers[0].image.format() == ALPHA_FMT
+
+    def single(self):
+        """Only one layer, fully shown: the picture is just that layer."""
+        ly = self.layers[0]
+        return len(self.layers) == 1 and ly.visible and ly.opacity >= 1.0
+
     def conform(self, img: QImage, bg=QColor(255, 255, 255)) -> QImage:
-        """img in the picture's pixel format: kept see-through if the picture is, else flattened."""
-        if self.transparent:
+        """img in the active layer's pixel format: kept see-through if the layer is, else flattened."""
+        return self._conform_to(self.image, img, bg)
+
+    @staticmethod
+    def _conform_to(model: QImage, img: QImage, bg):
+        if model.format() == ALPHA_FMT:
             return img if img.format() == ALPHA_FMT else img.convertToFormat(ALPHA_FMT)
         return flatten(img, bg)
 
-    def blank(self, w, h, bg: QColor) -> QImage:
-        """A new empty image in the picture's format: transparent, or filled with bg."""
-        img = QImage(w, h, ALPHA_FMT if self.transparent else QImage.Format_RGB32)
-        img.fill(0 if self.transparent else bg)
+    def blank(self, w, h, bg: QColor, like: QImage = None) -> QImage:
+        """A new empty image in the format of `like` (default: the active layer): transparent,
+        or filled with bg."""
+        clear = (like if like is not None else self.image).format() == ALPHA_FMT
+        img = QImage(w, h, ALPHA_FMT if clear else QImage.Format_RGB32)
+        img.fill(0 if clear else bg)
         return img
 
     def set_transparent(self, on: bool, bg=QColor(255, 255, 255)):
-        """Switch the see-through background on or off (undoable)."""
-        if bool(on) == self.transparent:
+        """Switch the see-through background (bottom layer) on or off (undoable)."""
+        if bool(on) == self.background_transparent:
             return
         self.push_undo()
-        old = self.image.size()
-        self.image = self.image.convertToFormat(ALPHA_FMT) if on else flatten(self.image, bg)
+        old = self.size()
+        base = self.layers[0]
+        base.image = base.image.convertToFormat(ALPHA_FMT) if on else flatten(base.image, bg)
         self._emit(old)
 
+    # -- composite ---------------------------------------------------------------
+    def composite(self, active_image: QImage = None, upto=None) -> QImage:
+        """The visible layers blended together, bottom first. active_image stands in for the active
+        layer (a tool's preview); upto stops before that layer index."""
+        layers = self.layers if upto is None else self.layers[:upto]
+        if active_image is None and self.single():
+            return self.image
+        w, h = self.width(), self.height()
+        out = QImage(w, h, ALPHA_FMT)
+        out.fill(0)
+        p = QPainter(out)
+        for i, ly in enumerate(layers):
+            if not ly.visible or ly.opacity <= 0:
+                continue
+            p.setOpacity(ly.opacity)
+            p.drawImage(0, 0, active_image if (i == self.active and active_image is not None) else ly.image)
+        p.end()
+        return out
+
+    def flattened(self) -> QImage:
+        """What the picture looks like, for saving to a one-layer format, printing or copying."""
+        if self.single():
+            return self.image
+        img = self.composite()
+        return img if has_transparency(img) else flatten(img)
+
     # -- history -----------------------------------------------------------
+    def _state(self):
+        return _State(self.layers, self.active)
+
+    def _restore(self, st: _State):
+        old = self.size()
+        self.layers = [ly.copy() for ly in st.layers]
+        self.active = min(st.active, len(self.layers) - 1)
+        self._emit(old)
+        self.layersChanged.emit()
+
     def push_undo(self):
-        self.undo_stack.append(QImage(self.image))
+        self.undo_stack.append(self._state())
         self._trim()
         self.redo_stack.clear()
         self.modified = True
@@ -560,17 +668,16 @@ class Document(QObject):
     def _trim(self):
         while len(self.undo_stack) > MAX_UNDO:
             self.undo_stack.pop(0)
-        total = sum(i.sizeInBytes() for i in self.undo_stack)
+        total = sum(s.nbytes() for s in self.undo_stack)
         while total > UNDO_BYTES and len(self.undo_stack) > 3:
-            total -= self.undo_stack.pop(0).sizeInBytes()
+            total -= self.undo_stack.pop(0).nbytes()
 
     def drop_last_undo(self):
         """Abandon the operation started by the last push_undo()."""
         if self.undo_stack:
-            old = self.image.size()
-            self.image = self.undo_stack.pop()
+            st = self.undo_stack.pop()
             self.historyChanged.emit()
-            self._emit(old)
+            self._restore(st)
 
     def can_undo(self):
         return bool(self.undo_stack)
@@ -581,33 +688,44 @@ class Document(QObject):
     def undo(self):
         if not self.undo_stack:
             return
-        old = self.image.size()
-        self.redo_stack.append(QImage(self.image))
-        self.image = self.undo_stack.pop()
+        self.redo_stack.append(self._state())
+        st = self.undo_stack.pop()
         self.modified = True
         self.historyChanged.emit()
-        self._emit(old)
+        self._restore(st)
 
     def redo(self):
         if not self.redo_stack:
             return
-        old = self.image.size()
-        self.undo_stack.append(QImage(self.image))
-        self.image = self.redo_stack.pop()
+        self.undo_stack.append(self._state())
+        st = self.redo_stack.pop()
         self.modified = True
         self.historyChanged.emit()
-        self._emit(old)
+        self._restore(st)
 
     def _emit(self, old_size=None):
-        if old_size is not None and old_size != self.image.size():
+        if old_size is not None and old_size != self.size():
             self.sizeChanged.emit()
         self.changed.emit()
 
     def set_image(self, img: QImage, bg=QColor(255, 255, 255)):
-        """Replace pixels (caller has already pushed undo), keeping the picture's format."""
-        old = self.image.size()
+        """Replace the active layer's pixels (caller has already pushed undo), keeping its format.
+        If the size changes, the other layers are cropped or grown to match."""
+        old = self.size()
         self.image = self.conform(img, bg)
+        if self.image.size() != old:
+            for i, ly in enumerate(self.layers):
+                if i != self.active:
+                    ly.image = self._sized(ly.image, self.image.width(), self.image.height(), bg)
         self._emit(old)
+
+    def _sized(self, img, w, h, bg, ox=0, oy=0):
+        """img on a w x h canvas of its own format, its top-left at (-ox, -oy)."""
+        out = self.blank(w, h, bg, like=img)
+        p = QPainter(out)
+        p.drawImage(-ox, -oy, img)
+        p.end()
+        return out
 
     def resize_canvas(self, w, h, bg: QColor):
         """Make the canvas w x h. Returns False (and changes nothing) if that is too large."""
@@ -617,19 +735,159 @@ class Document(QObject):
         if not fits(w, h):
             return False
         self.push_undo()
-        img = self.blank(w, h, bg)
-        p = QPainter(img)
-        p.drawImage(0, 0, self.image)
-        p.end()
-        self.set_image(img)
+        self.grow(w, h, bg)
         return True
 
+    def grow(self, w, h, bg: QColor):
+        """Resize every layer's canvas to w x h (no undo step of its own)."""
+        old = self.size()
+        for ly in self.layers:
+            ly.image = self._sized(ly.image, w, h, bg)
+        self._emit(old)
+
+    def crop_all(self, rect: QRect, bg: QColor):
+        """Cut every layer down to rect (no undo step of its own)."""
+        old = self.size()
+        for ly in self.layers:
+            ly.image = self._sized(ly.image, rect.width(), rect.height(), bg, rect.left(), rect.top())
+        self._emit(old)
+
+    def transform_all(self, fn, bg: QColor):
+        """Apply fn(QImage) -> QImage to every layer (rotate, flip, resize, skew); one undo step."""
+        self.push_undo()
+        old = self.size()
+        for ly in self.layers:
+            ly.image = self._conform_to(ly.image, fn(ly.image), bg)
+        self._emit(old)
+
+    # -- layers ------------------------------------------------------------------
+    def _new_name(self):
+        names = {ly.name for ly in self.layers}
+        while True:
+            self._layer_no += 1
+            name = f"Layer {self._layer_no}"
+            if name not in names:
+                return name
+
+    def _fix_formats(self):
+        """Only the bottom layer may be opaque; anything above it is see-through."""
+        for ly in self.layers[1:]:
+            if ly.image.format() != ALPHA_FMT:
+                ly.image = ly.image.convertToFormat(ALPHA_FMT)
+
+    def _layers_done(self, old=None):
+        self._fix_formats()
+        self._emit(old or self.size())
+        self.layersChanged.emit()
+
+    def set_active(self, i):
+        i = max(0, min(len(self.layers) - 1, int(i)))
+        if i != self.active:
+            self.active = i
+            self.layersChanged.emit()
+
+    def add_layer(self):
+        """A new see-through layer above the active one, which becomes active."""
+        self.push_undo()
+        img = QImage(self.width(), self.height(), ALPHA_FMT)
+        img.fill(0)
+        self.layers.insert(self.active + 1, Layer(img, self._new_name()))
+        self.active += 1
+        self._layers_done()
+
+    def duplicate_layer(self):
+        self.push_undo()
+        src = self.layer.copy()
+        src.name = f"{self.layer.name} copy"
+        self.layers.insert(self.active + 1, src)
+        self.active += 1
+        self._layers_done()
+
+    def delete_layer(self):
+        if len(self.layers) <= 1:
+            return False
+        self.push_undo()
+        del self.layers[self.active]
+        self.active = max(0, self.active - 1)
+        self._layers_done()
+        return True
+
+    def move_layer(self, d):
+        j = self.active + d
+        if not (0 <= j < len(self.layers)):
+            return False
+        self.push_undo()
+        ls = self.layers
+        ls[self.active], ls[j] = ls[j], ls[self.active]
+        self.active = j
+        self._layers_done()
+        return True
+
+    def merge_down(self):
+        """Blend the active layer into the one below it."""
+        if self.active == 0:
+            return False
+        self.push_undo()
+        top, below = self.layers[self.active], self.layers[self.active - 1]
+        if top.visible:
+            img = QImage(below.image)
+            p = QPainter(img)
+            p.setOpacity(top.opacity)
+            p.drawImage(0, 0, top.image)
+            p.end()
+            below.image = img
+        del self.layers[self.active]
+        self.active -= 1
+        self._layers_done()
+        return True
+
+    def flatten_layers(self, bg=QColor(255, 255, 255)):
+        """Merge every visible layer into one background layer."""
+        if len(self.layers) == 1:
+            return False
+        self.push_undo()
+        img = self.composite()
+        if not self.background_transparent:
+            img = flatten(img, bg)
+        self.layers = [Layer(img, self.layers[0].name)]
+        self.active = 0
+        self._layers_done()
+        return True
+
+    def set_layer_props(self, i, name=None, visible=None, opacity=None, undo=True):
+        ly = self.layers[i]
+        new = (ly.name if name is None else name, ly.visible if visible is None else bool(visible),
+               ly.opacity if opacity is None else max(0.0, min(1.0, float(opacity))))
+        if new == (ly.name, ly.visible, ly.opacity):
+            return
+        if undo:
+            self.push_undo()
+            ly = self.layers[i]
+        ly.name, ly.visible, ly.opacity = new
+        self.changed.emit()
+        self.layersChanged.emit()
+
+    def set_layers(self, layers, active=None):
+        """Replace the whole stack (opening a layered file)."""
+        old = self.size()
+        self.layers = layers
+        self.active = len(layers) - 1 if active is None else active
+        self._layer_no = len(layers)
+        self._layers_done(old)
+
     # -- files -------------------------------------------------------------
-    def new(self, w, h):
-        self.image = QImage(w, h, QImage.Format_RGB32)
-        self.image.fill(QColor(255, 255, 255))
+    def _reset(self, layers):
+        self.layers = layers
+        self.active = len(layers) - 1
+        self._layer_no = len(layers)
+        self._fix_formats()
         self.undo_stack.clear()
         self.redo_stack.clear()
+
+    def new(self, w, h):
+        img = QImage(w, h, QImage.Format_RGB32)
+        img.fill(QColor(255, 255, 255))
+        self._reset([Layer(img)])
         self.path = None
         self.fmt = "png"
         self.modified = False
@@ -638,13 +896,15 @@ class Document(QObject):
         self.historyChanged.emit()
         self.sizeChanged.emit()
         self.changed.emit()
+        self.layersChanged.emit()
         self.fileChanged.emit()
 
     def load(self, path):
-        img = load_image(path)
-        self.image = img
-        self.undo_stack.clear()
-        self.redo_stack.clear()
+        if format_for_path(path, "") == "ora":
+            layers = load_ora(path)
+        else:
+            layers = [Layer(load_image(path))]
+        self._reset(layers)
         self.path = os.path.abspath(path)
         self.fmt = format_for_path(path)
         self.modified = False
@@ -652,13 +912,17 @@ class Document(QObject):
         self.historyChanged.emit()
         self.sizeChanged.emit()
         self.changed.emit()
+        self.layersChanged.emit()
         self.fileChanged.emit()
 
-    def restore(self, img: QImage, path, fmt):
-        """Bring back a picture from a recovery copy: unsaved, tied to its original file if any."""
-        self.image = img.convertToFormat(ALPHA_FMT) if has_transparency(img) else flatten(img)
-        self.undo_stack.clear()
-        self.redo_stack.clear()
+    def restore(self, img, path, fmt):
+        """Bring back a picture from a recovery copy: unsaved, tied to its original file if any.
+        img is a QImage or a list of Layers."""
+        if isinstance(img, list):
+            layers = img
+        else:
+            layers = [Layer(img.convertToFormat(ALPHA_FMT) if has_transparency(img) else flatten(img))]
+        self._reset(layers)
         self.path = os.path.abspath(path) if path else None
         self.fmt = fmt if fmt in FORMAT_BY_KEY else "png"
         self.modified = True
@@ -669,14 +933,17 @@ class Document(QObject):
         self.historyChanged.emit()
         self.sizeChanged.emit()
         self.changed.emit()
+        self.layersChanged.emit()
         self.fileChanged.emit()
 
     def save(self, path, fmt):
-        save_image(self.image, path, fmt)
-        if fmt in LOSSY:
-            reduced = reduce_colors(self.image, fmt)
-            self.image = reduced
-            self.changed.emit()
+        if fmt == "ora":
+            save_ora(self.layers, path)
+        else:
+            save_image(self.flattened(), path, fmt)
+            if fmt in LOSSY and self.single():
+                self.image = reduce_colors(self.image, fmt)
+                self.changed.emit()
         self.path = os.path.abspath(path)
         self.fmt = fmt
         self.modified = False
@@ -691,3 +958,100 @@ class Document(QObject):
         except OSError:
             self.file_size = None
             self.saved_at = time.time()
+
+
+# ------------------------------------------------------------ OpenRaster --
+ORA_MIME = b"image/openraster"
+
+
+def _png_bytes(img: QImage) -> bytes:
+    from PySide6.QtCore import QBuffer, QByteArray, QIODevice
+    ba = QByteArray()
+    buf = QBuffer(ba)
+    buf.open(QIODevice.WriteOnly)
+    img.save(buf, "PNG")
+    buf.close()
+    return bytes(ba.data())
+
+
+def blend_layers(layers) -> QImage:
+    """The visible layers (bottom first) blended into one image."""
+    base = layers[0]
+    if len(layers) == 1 and base.visible and base.opacity >= 1.0:
+        return base.image
+    out = QImage(base.image.width(), base.image.height(), ALPHA_FMT)
+    out.fill(0)
+    p = QPainter(out)
+    for ly in layers:
+        if ly.visible and ly.opacity > 0:
+            p.setOpacity(ly.opacity)
+            p.drawImage(0, 0, ly.image)
+    p.end()
+    return out
+
+
+def save_ora(layers, path, merged=None):
+    """Write layers (bottom first) as an OpenRaster file (GIMP, Krita and MyPaint open it).
+    Safe to call from a worker thread."""
+    import zipfile
+    from xml.sax.saxutils import quoteattr
+    w, h = layers[0].image.width(), layers[0].image.height()
+    tmp = path + ".tmp"
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr(zipfile.ZipInfo("mimetype"), ORA_MIME, compress_type=zipfile.ZIP_STORED)
+        entries = []
+        for i, ly in enumerate(layers):
+            src = f"data/layer{i}.png"
+            z.writestr(src, _png_bytes(ly.image))
+            entries.append(f'<layer name={quoteattr(ly.name)} src="{src}" x="0" y="0" '
+                           f'opacity="{ly.opacity:.3f}" visibility="{"visible" if ly.visible else "hidden"}"/>')
+        xml = (f'<?xml version="1.0" encoding="UTF-8"?>\n<image version="0.0.3" w="{w}" h="{h}" '
+               f'xres="96" yres="96"><stack>' + "".join(reversed(entries)) + "</stack></image>")
+        z.writestr("stack.xml", xml.encode("utf-8"))
+        if merged is None:
+            merged = blend_layers(layers)
+        z.writestr("mergedimage.png", _png_bytes(merged))
+        z.writestr("Thumbnails/thumbnail.png",
+                   _png_bytes(merged.scaled(256, 256, Qt.KeepAspectRatio, Qt.SmoothTransformation)))
+    os.replace(tmp, path)
+
+
+def load_ora(path):
+    """Layers (bottom first) from an OpenRaster file."""
+    import zipfile
+    import xml.etree.ElementTree as ET
+    try:
+        z = zipfile.ZipFile(path)
+    except (zipfile.BadZipFile, OSError) as ex:
+        raise OSError(f"This is not a valid OpenRaster file ({ex}).")
+    with z:
+        root = ET.fromstring(z.read("stack.xml"))
+        w, h = int(root.get("w")), int(root.get("h"))
+        out = []
+
+        def walk(stack, ox=0, oy=0):
+            for el in stack:                       # top first in the file
+                x = ox + int(float(el.get("x", 0) or 0))
+                y = oy + int(float(el.get("y", 0) or 0))
+                if el.tag == "stack":
+                    walk(el, x, y)
+                elif el.tag == "layer" and el.get("src"):
+                    img = QImage.fromData(z.read(el.get("src")))
+                    if img.isNull():
+                        continue
+                    canvas = QImage(w, h, ALPHA_FMT)
+                    canvas.fill(0)
+                    p = QPainter(canvas)
+                    p.drawImage(x, y, img)
+                    p.end()
+                    out.append(Layer(canvas, el.get("name") or f"Layer {len(out) + 1}",
+                                     el.get("visibility", "visible") != "hidden",
+                                     max(0.0, min(1.0, float(el.get("opacity", 1) or 1)))))
+        walk(root.find("stack"))
+    if not out:
+        raise OSError("The OpenRaster file has no layers.")
+    out.reverse()                                  # bottom first
+    base = out[0]
+    if not has_transparency(base.image):
+        base.image = flatten(base.image)
+    return out

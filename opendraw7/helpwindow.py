@@ -68,6 +68,22 @@ see-through areas, which are shown as a grey and white checkerboard. The parts y
 the white background included, stay as they are; erase or delete them to make them see-through.</p>
 <p>PNG, GIF and TIFF files keep see-through areas. JPEG and BMP files cannot, so they are saved over
 white. Pictures you open that already have see-through areas keep them.</p>"""),
+    ("Layers", """
+<p>Layers are like sheets of clear film stacked on the picture: you can draw on one without touching
+the others. Turn on <b>Layers</b> on the <b>View</b> tab (Ctrl+L) to show the Layers pane at the
+right.</p>
+<ul>
+<li>Click a layer to draw on it. Everything you draw, fill, erase, select or type goes on the selected
+layer; the colour picker takes the colour you see.</li>
+<li>Click the eye to hide or show a layer. Double-click its name to rename it. Right-click a layer for
+more commands, such as <b>Flatten picture</b>.</li>
+<li>The buttons under the list add a new layer, duplicate, delete, move the layer up or down, and
+merge it into the layer below. <b>Opacity</b> makes the selected layer partly see-through.</li>
+<li>Rotating, flipping, resizing, skewing, cropping and changing the canvas size act on every layer
+together. Invert color acts on the selected layer.</li>
+</ul>
+<p>To keep the layers, save as <b>OpenRaster (*.ora)</b>; GIMP and Krita open these files too. Every
+other file type saves the picture as you see it, with the layers merged.</p>"""),
     ("Zoom and view", """
 <p>Zoom with the slider in the status bar, with Ctrl and the mouse wheel, with Ctrl+PgUp and Ctrl+PgDn,
 or on the <b>View</b> tab. <b>Fit to window</b> (Ctrl+0) shows the whole picture. The <b>Magnifier</b>

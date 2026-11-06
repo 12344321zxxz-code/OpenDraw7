@@ -598,6 +598,15 @@ class SelectTool(Tool):
         if s is None:
             return
         doc = self.c.doc
+        if len(doc.layers) > 1:
+            # every layer is cut to the selection's rectangle
+            r = QRect(s.rect)
+            if s.image is None:
+                doc.push_undo()
+            self.commit()
+            doc.crop_all(r, self.c.state.color2)
+            self._notify()
+            return
         img = self.content(self._bg())
         r = QRect(s.rect)
         lifted = s.image is not None

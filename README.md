@@ -55,6 +55,9 @@ python run.py        # or: pip install . && opendraw7
 - **Help** window with search (F1).
 - **From scanner or camera** through the SANE tools (`scanimage`) and `ffmpeg`.
 - **Crash recovery**: unsaved work is kept every two minutes and offered back after a crash.
+- **Layers** (View tab, Ctrl+L): a Layers pane to add, duplicate, delete, reorder, merge, hide and
+  rename layers and set their opacity. Save as OpenRaster (`.ora`, also opened by GIMP and Krita) to
+  keep them; other file types save the picture as seen.
 - **Files**: PNG, JPEG, BMP (monochrome, 16-color, 256-color, 24-bit), GIF, TIFF; ICO and WebP can
   be opened. Recent pictures, drag a file onto the window to open it, print, page setup and print
   preview, send in e-mail, set as desktop background.
@@ -73,6 +76,7 @@ python run.py        # or: pip install . && opendraw7
 | Ctrl+PgUp / PgDn | Zoom in, out |
 | Ctrl++ / Ctrl+- | Thicker, thinner line |
 | Ctrl+0 | Fit to window |
+| Ctrl+L | Layers pane |
 | F11 | Full screen |
 | F1 | Help |
 | Alt, F10 | Key tips |
@@ -95,7 +99,7 @@ against a running copy, so do not expect a pixel-for-pixel match.
 - **Dialogs** (open, save, print) are the Qt or desktop ones; Edit Colors is rebuilt.
 - **Help** text is written for OpenDraw7; the original's help is copyrighted.
 - **Additions** the original does not have: magic wand, transparent backgrounds, fit to window,
-  crash recovery.
+  crash recovery, layers.
 
 On Wayland desktops OpenDraw7 runs through XWayland by default, because that is where the custom
 title bar has been tested. Set `QT_QPA_PLATFORM=wayland` to try native Wayland.

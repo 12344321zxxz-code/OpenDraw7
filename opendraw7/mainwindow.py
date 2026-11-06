@@ -134,6 +134,10 @@ class MainWindow(QWidget):
         grid.addWidget(self.hruler, 0, 1)
         grid.addWidget(self.vruler, 1, 0)
         grid.addWidget(self.canvas, 1, 1)
+        from .layerspane import LayersPane
+        self.layers_pane = LayersPane(self)
+        self.layers_pane.hide()
+        grid.addWidget(self.layers_pane, 0, 2, 2, 1)
 
         self.vbox = QVBoxLayout(self)
         self.vbox.setSpacing(0)
@@ -148,6 +152,8 @@ class MainWindow(QWidget):
         self._build_view()
         self._build_text()
         self._build_shortcuts()
+        if str(self.settings.value("layers_pane", "false")).lower() == "true":
+            self.layers_pane.show()
 
         tb = self.titlebar
         tb.minimizeRequested.connect(self.showMinimized)
@@ -523,9 +529,13 @@ class MainWindow(QWidget):
         self.status_chk = RCheck("Status bar", tip_html("Status bar", "Show or hide the status bar at the "
                                                                       "bottom of the window."))
         self.status_chk.setChecked(True)
+        self.layers_chk = RCheck("Layers", tip_html("Layers", "Show or hide the Layers pane, where you add, "
+                                                              "hide, reorder and merge layers.", "Ctrl+L"))
         g.add(self.rulers_chk, 0, 0)
         g.add(self.grid_chk, 0, T.ROW_H)
         g.add(self.status_chk, 0, 2 * T.ROW_H)
+        g.add(self.layers_chk, max(self.rulers_chk.width(), self.grid_chk.width(), self.status_chk.width()) + 8, 0)
+        self.layers_chk.on_toggle = self.set_layers_pane
         self.rulers_chk.on_toggle = self.set_rulers
         self.grid_chk.on_toggle = self.set_grid
         self.status_chk.on_toggle = self.status.setVisible
@@ -667,6 +677,7 @@ class MainWindow(QWidget):
             ("Ctrl+R", lambda: self.set_rulers(not self.hruler.isVisible())),
             ("Ctrl+G", lambda: self.set_grid(not c.show_grid)),
             ("Ctrl+0", c.zoom_to_fit),
+            ("Ctrl+L", lambda: self.set_layers_pane(self.layers_pane.isHidden())),
             ("Ctrl+PgUp", lambda: c.zoom_step(1)), ("Ctrl+PgDown", lambda: c.zoom_step(-1)),
             ("F11", self.full_screen), ("F1", self.show_help),
             ("Ctrl+F1", lambda: self.ribbon.set_minimized(not self.ribbon.minimized)),
@@ -723,6 +734,7 @@ class MainWindow(QWidget):
         self.thumb_btn.setChecked(self.thumb is not None)
         self.rulers_chk.setChecked(self.hruler.isVisible())
         self.grid_chk.setChecked(c.show_grid)
+        self.layers_chk.setChecked(not self.layers_pane.isHidden())
         self.zoomin_btn.setEnabled(c.zoom < 8)
         self.zoomout_btn.setEnabled(c.zoom > 0.125)
 
@@ -766,6 +778,11 @@ class MainWindow(QWidget):
             w.setVisible(on)
         self.refresh()
 
+    def set_layers_pane(self, on):
+        self.layers_pane.setVisible(bool(on))
+        self.settings.setValue("layers_pane", bool(on))
+        self.refresh()
+
     def set_grid(self, on):
         self.canvas.show_grid = on
         self.canvas.viewport().update()
@@ -773,7 +790,7 @@ class MainWindow(QWidget):
 
     def full_screen(self):
         self.canvas.commit_pending()
-        v = FullScreenView(self.doc.image)
+        v = FullScreenView(self.doc.flattened())
         self._fullscreen = v
         v.showFullScreen()
 
@@ -856,15 +873,16 @@ class MainWindow(QWidget):
                                     "affects the current file and may cause some color information to be lost.\n\n"
                                     "Do you want to continue?", QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
             if r == QMessageBox.Yes:
-                self.doc.push_undo()
-                img = reduce_colors(self.doc.image, "bmp1")
-                if self.doc.transparent:     # keep the see-through areas see-through
-                    img = img.convertToFormat(QImage.Format_ARGB32_Premultiplied)
-                    p = QPainter(img)
-                    p.setCompositionMode(QPainter.CompositionMode_DestinationIn)
-                    p.drawImage(0, 0, self.doc.image)
-                    p.end()
-                self.doc.set_image(img)
+                def to_bw(src):
+                    img = reduce_colors(src, "bmp1")
+                    if src.hasAlphaChannel():      # keep the see-through areas see-through
+                        img = img.convertToFormat(QImage.Format_ARGB32_Premultiplied)
+                        p = QPainter(img)
+                        p.setCompositionMode(QPainter.CompositionMode_DestinationIn)
+                        p.drawImage(0, 0, src)
+                        p.end()
+                    return img
+                self.doc.transform_all(to_bw, self.state.color2)
         if not self.doc.resize_canvas(w, h, self.state.color2):
             self.canvas.too_big()
 
@@ -928,6 +946,8 @@ class MainWindow(QWidget):
             return False
         self.settings.setValue("dir", os.path.dirname(os.path.abspath(path)))
         self._add_recent(os.path.abspath(path))
+        if len(self.doc.layers) > 1:
+            self.set_layers_pane(True)
         self.canvas.set_zoom(1.0)
         self.canvas.horizontalScrollBar().setValue(0)
         self.canvas.verticalScrollBar().setValue(0)
@@ -1013,7 +1033,7 @@ class MainWindow(QWidget):
     def _render_page(self, printer):
         p = QPainter(printer)
         page = printer.pageLayout().paintRectPixels(printer.resolution())
-        img = self.doc.image
+        img = self.doc.flattened()
         dpi_scale = printer.resolution() / 96.0
         w, h = img.width() * dpi_scale, img.height() * dpi_scale
         k = min(1.0, page.width() / w, page.height() / h)
@@ -1047,7 +1067,7 @@ class MainWindow(QWidget):
         os.makedirs(base, exist_ok=True)
         path = os.path.join(base, name)
         self.canvas.commit_pending()
-        self.doc.image.save(path, "PNG")
+        self.doc.flattened().save(path, "PNG")
         return path
 
     def send_email(self):
