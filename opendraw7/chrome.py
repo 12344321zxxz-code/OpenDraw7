@@ -276,6 +276,14 @@ class ZoomControl(QWidget):
         return QRect(46 + 18 + self.TRACK_W + 12, 3, 17, 17)
 
     @staticmethod
+    def label(z):
+        """'12.5%', '63%', '100%': whole percents except the small fixed steps."""
+        pct = z * 100
+        if pct < 100 and abs(pct * 10 - round(pct * 10)) < 1e-6:
+            return f"{round(pct * 10) / 10:g}%"
+        return f"{round(pct)}%"
+
+    @staticmethod
     def _frac(z):
         """0..1 slider position; 100% sits in the middle."""
         if z <= 1:
@@ -358,8 +366,7 @@ class ZoomControl(QWidget):
         p = QPainter(self)
         p.setFont(self.font())
         p.setPen(T.TEXT_BLACK)
-        pct = self.zoom * 100
-        label = f"{pct:g}%"
+        label = self.label(self.zoom)
         p.drawText(QRect(0, 0, 42, self.height()), Qt.AlignRight | Qt.AlignVCenter, label)
         self._round_btn(p, self._minus(), False, self._hover == "minus")
         self._round_btn(p, self._plus(), True, self._hover == "plus")

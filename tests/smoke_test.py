@@ -536,6 +536,49 @@ for transparent in (True, False):
     ok(alive, f"text keeps the picture alive (transparent={transparent})")
 doc.new(800, 600)
 
+# ---- 0.2.1 regressions -----------------------------------------------------------------
+from PySide6.QtWidgets import QMessageBox  # noqa: E402
+from PySide6.QtGui import QKeyEvent  # noqa: E402
+from opendraw7.brushes import ReplaceStroke  # noqa: E402
+_warned = []
+_orig_warning = QMessageBox.warning
+QMessageBox.warning = staticmethod(lambda *a, **k: _warned.append(a[2]) or QMessageBox.Ok)
+doc.new(800, 600)
+c.resize_skew(30000, 30000)
+ok(doc.size() == QSize(800, 600) and _warned, "a too-large resize is refused with a message")
+_warned.clear()
+c.resize_skew(800, 600, 89, 89)
+ok(doc.size() == QSize(800, 600) and _warned, "a too-large skew is refused with a message")
+ok(not doc.resize_canvas(30000, 30000, QColor(255, 255, 255)) and doc.size() == QSize(800, 600),
+   "a too-large canvas is refused")
+c.resize_skew(1600, 1200)
+ok(doc.size() == QSize(1600, 1200), "ordinary resizes still work")
+c.undo()
+QMessageBox.warning = _orig_warning
+# right-button eraser leaves see-through pixels alone
+doc.new(200, 100)
+doc.set_transparent(True)
+pp = QPainter(doc.image)
+pp.setCompositionMode(QPainter.CompositionMode_Clear)
+pp.fillRect(0, 0, 100, 100, QColor(0, 0, 0))
+pp.end()
+rs = ReplaceStroke(doc.image, QColor(255, 255, 255), 10, QColor(0, 0, 0))
+rs.start(QPointF(50, 50))
+rs.line_to(QPointF(60, 50))
+ok(doc.image.pixel(50, 50) == 0, "right-button eraser keeps see-through pixels see-through")
+doc.new(800, 600)
+# big photos open (Qt refuses over 256 MB by default)
+bigp = os.path.join(tempfile.mkdtemp(), "big.png")
+bimg = QImage(12000, 6000, QImage.Format_RGB32)
+bimg.fill(QColor(10, 20, 30))
+bimg.save(bigp)
+del bimg
+ok(load_image(bigp).size() == QSize(12000, 6000), "a 12000 x 6000 photo opens")
+# zoom label after fit to window
+lab = win.status.zoomer.label
+ok(lab(0.634722) == "63%" and lab(0.125) == "12.5%" and lab(0.25) == "25%" and lab(8) == "800%",
+   "zoom label is rounded")
+
 # ---- key tips -------------------------------------------------------------------------
 win.activateWindow()
 QTest.qWait(100)
@@ -557,6 +600,13 @@ if win.isActiveWindow():
     QTest.keyClick(c, Qt.Key_F10)
     QTest.keyClick(c, Qt.Key_Escape)
     ok(win.keytips.level == 0, "esc hides key tips")
+    for seq in ([(QEvent.KeyPress, Qt.Key_Alt, Qt.NoModifier), (QEvent.KeyRelease, Qt.Key_Alt, Qt.AltModifier | Qt.ShiftModifier)],
+                [(QEvent.KeyPress, Qt.Key_Shift, Qt.NoModifier), (QEvent.KeyPress, Qt.Key_Alt, Qt.ShiftModifier),
+                 (QEvent.KeyRelease, Qt.Key_Alt, Qt.AltModifier | Qt.ShiftModifier)]):
+        for typ, key, mod in seq:
+            app.sendEvent(c, QKeyEvent(typ, key, mod))
+        ok(win.keytips.level == 0, "alt+shift (keyboard layout switch) does not show key tips")
+        win.keytips.hide()
 
 doc.modified = False
 win.close()

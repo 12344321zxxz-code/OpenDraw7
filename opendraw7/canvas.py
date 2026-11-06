@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QAbstractScrollArea, QFrame
 
 from . import theme as T
 from . import icons
-from .document import load_image
+from .document import load_image, fits, TOO_BIG
 from .tools import (Ev, FreehandTool, FillTool, PickerTool, MagnifierTool, SelectTool, ShapeTool,
                     CurveTool, PolygonTool, TextTool)
 
@@ -388,7 +388,8 @@ class Canvas(QAbstractScrollArea):
                 s = self._resize[1]
                 self._resize = None
                 self.sizeInfo.emit(None)
-                self.doc.resize_canvas(s.width(), s.height(), self.state.color2)
+                if not self.doc.resize_canvas(s.width(), s.height(), self.state.color2):
+                    self.too_big()
                 self.viewport().update()
             return
         self.tool.release(ev)
@@ -548,8 +549,18 @@ class Canvas(QAbstractScrollArea):
             t.scale(-1, 1)
         self._apply(lambda img: img.transformed(t, Qt.FastTransformation))
 
+    def too_big(self):
+        from PySide6.QtWidgets import QMessageBox
+        QMessageBox.warning(self.window(), "Paint", TOO_BIG)
+
     def resize_skew(self, w, h, skew_h=0.0, skew_v=0.0):
         """Scale to w x h pixels, then skew by the given angles (degrees)."""
+        t = QTransform()
+        t.shear(math.tan(math.radians(skew_h)), math.tan(math.radians(skew_v)))
+        out = t.mapRect(QRectF(0, 0, max(1, w), max(1, h)))
+        if not fits(int(math.ceil(out.width())), int(math.ceil(out.height()))):
+            self.too_big()
+            return
         def fn(img):
             out = img
             if w != img.width() or h != img.height():

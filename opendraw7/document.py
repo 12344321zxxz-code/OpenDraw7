@@ -8,6 +8,15 @@ from PySide6.QtGui import QImage, QColor, QPainter, QImageReader, QImageWriter
 
 MAX_UNDO = 50
 UNDO_BYTES = 600 * 1024 * 1024
+MAX_SIDE = 25000                  # largest width or height a picture may get from an edit
+MAX_PIXELS = 120_000_000          # about 480 MB per copy; undo keeps a few more
+TOO_BIG = (f"The picture would be too large. Paint can work with pictures up to {MAX_SIDE:,} pixels "
+           f"wide or high and {MAX_PIXELS // 1_000_000} million pixels in all.")
+
+
+def fits(w, h) -> bool:
+    """True if a w x h picture is within the size Paint will make by editing."""
+    return 1 <= w <= MAX_SIDE and 1 <= h <= MAX_SIDE and w * h <= MAX_PIXELS
 
 VGA16 = [0x000000, 0x800000, 0x008000, 0x808000, 0x000080, 0x800080, 0x008080, 0x808080,
          0xC0C0C0, 0xFF0000, 0x00FF00, 0xFFFF00, 0x0000FF, 0xFF00FF, 0x00FFFF, 0xFFFFFF]
@@ -467,6 +476,8 @@ def save_image(img: QImage, path: str, fmt: str) -> None:
 
 
 def load_image(path: str) -> QImage:
+    if QImageReader.allocationLimit() < 1024:
+        QImageReader.setAllocationLimit(1024)     # Qt refuses images over 256 MB by default
     r = QImageReader(path)
     r.setAutoTransform(True)
     r.setDecideFormatFromContent(True)
@@ -599,15 +610,19 @@ class Document(QObject):
         self._emit(old)
 
     def resize_canvas(self, w, h, bg: QColor):
+        """Make the canvas w x h. Returns False (and changes nothing) if that is too large."""
         w, h = max(1, int(w)), max(1, int(h))
         if w == self.width() and h == self.height():
-            return
+            return True
+        if not fits(w, h):
+            return False
         self.push_undo()
         img = self.blank(w, h, bg)
         p = QPainter(img)
         p.drawImage(0, 0, self.image)
         p.end()
         self.set_image(img)
+        return True
 
     # -- files -------------------------------------------------------------
     def new(self, w, h):

@@ -9,7 +9,7 @@ from . import icons
 from .brushes import make_stroke, PencilStroke, ReplaceStroke, render_shape
 import numpy as np
 
-from .document import flood_fill, flood_region, pixels, const_pixels, ALPHA_FMT
+from .document import flood_fill, flood_region, pixels, const_pixels, fits, ALPHA_FMT
 
 WAND_TOLERANCE = 32         # per-channel difference the magic wand still treats as the same colour
 from .shapes import shape_path, is_curved
@@ -616,7 +616,8 @@ class SelectTool(Tool):
         self.commit()
         img = img.convertToFormat(QImage.Format_ARGB32_Premultiplied)
         doc.push_undo()
-        if img.width() > doc.width() or img.height() > doc.height():
+        grow_w, grow_h = max(img.width(), doc.width()), max(img.height(), doc.height())
+        if (img.width() > doc.width() or img.height() > doc.height()) and fits(grow_w, grow_h):
             big = doc.blank(max(img.width(), doc.width()), max(img.height(), doc.height()), c.state.color2)
             p = QPainter(big)
             p.drawImage(0, 0, doc.image)

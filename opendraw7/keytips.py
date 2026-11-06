@@ -227,7 +227,8 @@ class KeyTips(QObject):
             if e.isAutoRepeat():
                 return self.active()
             if k == Qt.Key_Alt:
-                self._armed = not self.active()
+                others = e.modifiers() & (Qt.ShiftModifier | Qt.ControlModifier | Qt.MetaModifier)
+                self._armed = not self.active() and not others
                 if self.active():
                     self.hide()
                     return True
@@ -242,7 +243,10 @@ class KeyTips(QObject):
             return False
         # KeyRelease
         if k == Qt.Key_Alt:
-            show = self._armed and not self.active()
+            # Alt+Shift switches the keyboard layout on many desktops: never treat it as "Alt alone",
+            # even when the desktop swallowed the Shift key events
+            others = e.modifiers() & (Qt.ShiftModifier | Qt.ControlModifier | Qt.MetaModifier)
+            show = self._armed and not self.active() and not others
             self._armed = False
             if show:
                 self.show(1)

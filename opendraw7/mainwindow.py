@@ -865,7 +865,8 @@ class MainWindow(QWidget):
                     p.drawImage(0, 0, self.doc.image)
                     p.end()
                 self.doc.set_image(img)
-        self.doc.resize_canvas(w, h, self.state.color2)
+        if not self.doc.resize_canvas(w, h, self.state.color2):
+            self.canvas.too_big()
 
     def about(self):
         AboutDialog(self).exec()

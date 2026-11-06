@@ -83,6 +83,18 @@ packaged build and refuses to archive a build that fails.
   `OPENDRAW7_AUTOSAVE_MS` to test it quickly (kill -9, relaunch).
 - Key tips (`keytips.py`) are an application event filter plus a transparent overlay. Tab-opening
   tips run immediately (not deferred) so a fast second letter already sees the tab's tips.
+- Size limits: every edit that can make the picture bigger (resize/skew, canvas handles, Image
+  Properties, pasting something larger) goes through `document.fits()` (25,000 px a side, 120 million
+  pixels). Before 0.2.1 a 30000x30000 resize or an 89/89 degree skew ran the machine out of memory
+  and the app was killed. Opening files is not limited by `fits()`, but Qt's own 256 MB reader limit
+  is raised to 1 GB in `load_image` so large photos open.
+- Key tips must not fire after Alt+Shift (keyboard layout switching on many desktops, and the
+  desktop may swallow the Shift events): Alt arms only without other modifiers, and its release
+  shows tips only if no other modifier is still down.
+- A randomized stress test helps: random tool/mouse/key/menu actions on the real window, with
+  QMenu/RMenu/QDialog/QMessageBox `exec` stubbed out (they block forever headless; patch `RMenu`
+  itself, patching `QMenu` does not reach it), plus an undo check: after every action that changes
+  the picture, undo must restore the exact pixels and redo must bring them back.
 - The app sets `QT_QPA_PLATFORM=xcb;wayland` on Linux because the custom title bar was only tested
   on X11. Native Wayland is untested.
 

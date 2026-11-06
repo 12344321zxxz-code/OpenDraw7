@@ -226,7 +226,7 @@ class ReplaceStroke(Stroke):
         m = pixels(mask)[r.top() - top:r.top() - top + r.height(), r.left() - left:r.left() - left + r.width()] != 0
         px = pixels(self.img)
         region = px[r.top():r.top() + r.height(), r.left():r.left() + r.width()]
-        hit = m & ((region | np.uint32(0xFF000000)) == self.match)
+        hit = m & (region == self.match)          # opaque pixels of exactly that colour only
         region[hit] = self.new
 
 
