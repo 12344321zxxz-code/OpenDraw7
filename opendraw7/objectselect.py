@@ -21,6 +21,9 @@ import numpy as np
 BG_NEAR = 26.0          # this close (RGBA distance, 0-510) to a background colour: background
 STEP = 14.0             # neighbours differing by at most this much (per channel) are one smooth area
 REACH = 22.0            # background may spread this far beyond the spread of an edge colour
+BRIDGE = 3              # gaps up to about 2 * BRIDGE pixels join parts of one object
+MAX_SPREAD = 70.0       # the largest spread an edge colour may claim
+DRIFT = 6.0             # beyond that, only by steps this small, through smooth pixels (gradients, vignettes)
 MIN_SPECK = 12          # isolated object pieces smaller than this are noise when selecting everything
 RIM = 2                 # rim width (pixels) given soft opacity
 
@@ -123,7 +126,9 @@ def _bytes(a):
 
 def _absdiff_max(x, y):
     """Largest per-channel difference of two (..., 4) uint8 arrays, without widening them."""
-    return (np.maximum(x, y) - np.minimum(x, y)).max(axis=-1)
+    d = np.maximum(x, y)
+    d -= np.minimum(x, y)
+    return np.maximum(np.maximum(d[..., 0], d[..., 1]), np.maximum(d[..., 2], d[..., 3]))
 
 
 def noise_level(b):
@@ -162,39 +167,76 @@ def _border_loop(a):
     return np.concatenate((a[0, :], a[1:, -1], a[-1, -2::-1], a[-2:0:-1, 0]))
 
 
-def edge_colours(a):
-    """(n, 4) float array of the background colours along the picture's edges. Only long stretches
-    of the edge count, so a character cut off by the edge does not teach its colour as background."""
-    loop = _border_loop(a)
-    ch = _channels(loop.reshape(1, -1))[0]
-    n = len(ch)
-    step = np.abs(np.diff(np.concatenate((ch, ch[:1])), axis=0)).max(axis=1)   # i -> i+1 (wraps)
-    cut = np.flatnonzero(step > 2 * STEP)
-    keep = np.zeros(n, dtype=bool)
-    if not len(cut):
-        keep[:] = True
+def edge_model(a, b=None):
+    """The background colours along the picture's edges.
+
+    Returns (centers, radii, accepted, solo): centers is an (n, 4) float array of A, R, G, B
+    colours found along the edge, radii how far each one's edge pixels spread, accepted which of
+    them count as background, and solo which appear on only one or two separate stretches of the
+    edge (a shape cut off by the edge looks like that; a background, a pattern or a gradient does
+    not)."""
+    if b is not None:                       # decide on the (smoothed) bytes the growth uses
+        bb = np.stack([_border_loop(b[..., i]) for i in range(4)], axis=-1)
+        ch = bb[:, [3, 2, 1, 0]].astype(np.float32)
     else:
-        min_len = max(16, int(0.05 * n))
-        for k in range(len(cut)):
-            s0 = cut[k] + 1
-            s1 = cut[(k + 1) % len(cut)]
-            length = (s1 - s0) % n + 1
-            if length >= min_len:
-                idx = (s0 + np.arange(length)) % n
-                keep[idx] = True
-    if not keep.any():
-        keep[:] = True
-    pts = ch[keep]
-    centers = _clusters(pts)
-    # how far the edge colours of each group spread (gradients spread a lot, flat colours not)
-    dist = np.sqrt(((pts[:, None, :] - centers[None, :, :]) ** 2).sum(axis=2))
+        ch = _channels(_border_loop(a).reshape(1, -1))[0]
+    n = len(ch)
+    centers = _clusters(ch, k_max=10)
+    dist = np.sqrt(((ch[:, None, :] - centers[None, :, :]) ** 2).sum(axis=2))
     lab = dist.argmin(axis=1)
-    radii = np.array([np.percentile(dist[lab == i, i], 95) if (lab == i).any() else 0.0
-                      for i in range(len(centers))], dtype=np.float32)
-    return centers, radii
+    k = len(centers)
+    # stretches of the edge between sharp colour changes
+    step = np.abs(np.diff(np.concatenate((ch, ch[:1])), axis=0)).max(axis=1)
+    cut = np.flatnonzero(step > 2 * STEP)
+    seg = np.zeros(n, dtype=np.int64)
+    if len(cut):
+        seg_id = np.zeros(n, dtype=np.int64)
+        seg_id[(cut + 1) % n] = 1
+        seg = np.cumsum(seg_id)
+        seg[seg == seg.max()] = 0 if seg_id[0] == 0 else seg.max()   # the wrap-around stretch
+    share = np.bincount(lab, minlength=k) / float(n)
+    nsegs = np.zeros(k, dtype=np.int64)
+    in_long_mixed = np.zeros(k, dtype=bool)
+    where = [[] for _ in range(k)]                  # positions of each colour's stretches
+    for sid in np.unique(seg):
+        idx = np.flatnonzero(seg == sid)
+        members = lab[idx]
+        counts = np.bincount(members, minlength=k)
+        present = counts >= max(3, 0.3 * len(idx))  # a real part of the stretch, not stray noise
+        nsegs += present
+        for i in np.flatnonzero(present):
+            where[i].append(idx[members == i])
+        if len(idx) >= 0.15 * n and (counts >= 0.1 * len(idx)).sum() >= 2:
+            in_long_mixed |= counts >= 0.1 * len(idx)   # a long stretch blending colours (gradient)
+    spread = np.zeros(k, dtype=np.float32)          # how much of the edge a colour's stretches span
+    for i in range(k):
+        if where[i]:
+            pos = np.sort(np.concatenate(where[i]))
+            gaps = np.diff(np.concatenate((pos, [pos[0] + n])))
+            spread[i] = (n - gaps.max()) / float(n)
+    # background: a big share of the edge, a pattern repeated all round it, or part of a gradient
+    accepted = ((share >= 0.15) & (spread >= 0.3)) | (share >= 0.35) | ((nsegs >= 3) & (spread >= 0.4)) \
+        | in_long_mixed
+    if not accepted.any():
+        accepted[share.argmax()] = True
+    radii = np.array([min(MAX_SPREAD, np.percentile(dist[lab == i, i], 95)) if (lab == i).any() else 0.0
+                      for i in range(k)], dtype=np.float32)
+    # bunched in one place along the edge: what a shape cut off by the edge looks like
+    solo = (spread < 0.3) & (share < share.max())
+    edge_model.spread_share = (spread, share)
+    # where along the edge each colour sits (for telling which colours belong to the same place)
+    places = [np.sort(np.concatenate(wh)) if wh else np.array([], dtype=np.int64) for wh in where]
+    edge_model.places = (places, n)
+    return centers, radii, accepted, solo
 
 
-def background(a):
+def edge_colours(a):
+    """(centers, radii) of the edge colours that count as background."""
+    centers, radii, accepted, _solo = edge_model(a)
+    return centers[accepted], radii[accepted]
+
+
+def background(a, exclude=()):
     """Bool mask of the background of a uint32 premultiplied-ARGB picture, grown in from its edges.
 
     The background spreads between two neighbouring pixels when their colours differ by only a
@@ -209,7 +251,13 @@ def background(a):
         # break the background into fragments; clean drawings are left exact
         b = _box_blur(b, 2 if noise >= 6 else 1)
     small = STEP + 2.5 * noise
-    centers, radii = edge_colours(a)                # rows of A, R, G, B
+    centers, radii, accepted, _solo = edge_model(a, b if noise >= 2 else None)
+    if len(exclude):
+        accepted = accepted.copy()
+        accepted[list(exclude)] = False
+        if not accepted.any():
+            return np.zeros((h, w), dtype=bool)
+    centers, radii = centers[accepted], radii[accepted]
     # per edge colour: squared distance by per-channel lookup tables
     v = np.arange(256, dtype=np.int32)
     near = np.zeros((h, w), dtype=bool)
@@ -222,9 +270,26 @@ def background(a):
         reach |= dd <= int((rad + REACH) ** 2)
     reach |= near
     bgish = near
-    right = ((_absdiff_max(b[:, 1:], b[:, :-1]) <= small) & reach[:, 1:] & reach[:, :-1]) \
+    # within reach of an edge colour, small steps; beyond it (a vignette's bright centre, a long
+    # gradient) only tiny ones - a true gradient changes a step or two per pixel, while even a soft
+    # outline edge jumps by far more
+    # less on slightly noisy pictures, none on noisy ones (smoothing for noise softens outlines too)
+    tiny = DRIFT if noise < 1 else (DRIFT / 2 if noise < 2 else -1)
+    dr = _absdiff_max(b[:, 1:], b[:, :-1])
+    dd = _absdiff_max(b[1:], b[:-1])
+    # the drift only runs through truly smooth pixels (no neighbour differs by more than a little):
+    # the soft edge of an outline always has a sharp neighbour somewhere
+    g = np.zeros((h, w), dtype=np.uint8)
+    if w > 1:
+        g[:, 1:] = np.maximum(g[:, 1:], dr)
+        g[:, :-1] = np.maximum(g[:, :-1], dr)
+    if h > 1:
+        g[1:] = np.maximum(g[1:], dd)
+        g[:-1] = np.maximum(g[:-1], dd)
+    smooth = g <= tiny
+    right = ((dr <= small) & reach[:, 1:] & reach[:, :-1]) | (smooth[:, 1:] & smooth[:, :-1]) \
         | (bgish[:, 1:] & bgish[:, :-1])
-    down = ((_absdiff_max(b[1:], b[:-1]) <= small) & reach[1:] & reach[:-1]) | (bgish[1:] & bgish[:-1])
+    down = ((dd <= small) & reach[1:] & reach[:-1]) | (smooth[1:] & smooth[:-1]) | (bgish[1:] & bgish[:-1])
     # A pixel that is a blend of the background-like colours on its two sides (the soft edge of a
     # horizon or a cloud) is a transition between backgrounds: the background may cross it. An
     # outline is never a blend of what is on its two sides, so it still stops the growth.
@@ -327,6 +392,34 @@ def select_object(a, x, y, bg=None):
     h, w = a.shape
     if bg is None:
         bg = background(a)
+    if bg[y, x]:
+        # Clicked something taken for background. If its colour is one that appears on only one or
+        # two stretches of the edge (a shape cut off by the edge), the click says it is an object.
+        bb = _bytes(a)
+        noisy = noise_level(bb) >= 2
+        if noisy:
+            bb = _box_blur(bb, 2 if noise_level(bb) >= 6 else 1)
+        centers, radii, accepted, solo = edge_model(a, bb if noisy else None)
+        places, n = edge_model.places
+        q = bb[y, x][[3, 2, 1, 0]].astype(np.float32)
+        d = np.sqrt(((centers - q) ** 2).sum(axis=1))
+        i = int(d.argmin())
+        spread, share = edge_model.spread_share
+        # a colour bunched in one place, or one that covers only part of the edge and is not the
+        # main background colour (a cut-off figure's clothes along the bottom edge)
+        partial = solo | ((spread < 0.5) & (share < 0.5 * share.max()))
+        if accepted[i] and partial[i] and d[i] <= radii[i] + REACH:
+            # every bunched colour at the same place along the edge belongs to that object too
+            group = [i]
+            if len(places[i]):
+                lo, hi = places[i][0], places[i][-1]
+                for j in np.flatnonzero(accepted & partial):
+                    pj = places[j]
+                    if j != i and len(pj) and pj[-1] >= lo - 0.03 * n and pj[0] <= hi + 0.03 * n:
+                        group.append(int(j))
+            bg2 = background(a, exclude=group)
+            if not bg2[y, x]:
+                bg = bg2
     objects = ~bg
     if not objects.any():
         return None, None
@@ -336,16 +429,36 @@ def select_object(a, x, y, bg=None):
         if MIN_SPECK > 1:
             mask = _drop_specks(mask)
     else:
-        if noise_level(_bytes(a)) >= 2:
-            objects = _close(objects, 2)            # photos: join fragments split by texture
-            objects &= ~(bg & ~_dilate(~bg, 1))     # but never take deep background
+        # Parts of one figure can be held together only by an outline that looks like the
+        # background (a black outline on a near-black sky), and photos fall apart into fragments
+        # along texture. Bridge gaps of a few pixels between the clicked part and the rest, and
+        # keep the bridge (it is the outline).
+        noisy = noise_level(_bytes(a)) >= 2
+        if noisy:
+            joined = _close(objects, 2)                # photos: join fragments split by texture
+        else:
+            joined = objects | (_darker_than_background(a, bg) & _dilate(objects, BRIDGE))
         seed = np.zeros((h, w), dtype=bool)
         seed[y, x] = True
-        mask = grow(objects, seed, diagonal=True)
+        mask = grow(joined, seed, diagonal=True)
     if not mask.any():
         return None, None
     alpha = soft_alpha(a, mask, bg)
     return mask, alpha
+
+
+def _darker_than_background(a, bg):
+    """Background pixels clearly darker than every background colour: the outline of a figure on
+    a dark background, which is close to the background colour but darker still."""
+    centers, radii, accepted, _solo = edge_model(a)
+    cen = centers[accepted]
+    # luminance from premultiplied channels (A, R, G, B)
+    lum_bg = (0.299 * cen[:, 1] + 0.587 * cen[:, 2] + 0.114 * cen[:, 3]).min()
+    if lum_bg > 90:                                  # only a dark background hides a dark outline
+        return np.zeros(bg.shape, dtype=bool)
+    b = _bytes(a)
+    lum = 0.299 * b[..., 2] + 0.587 * b[..., 1] + 0.114 * b[..., 0]
+    return bg & (lum < lum_bg - 6) & (b[..., 3] > 200)
 
 
 def _dilate(m, r):

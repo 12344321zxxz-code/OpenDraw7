@@ -16,8 +16,8 @@ def to_argb(arr):
     else:
         rgb = arr[..., :3].astype(np.uint32)
     return (a << 24) | (rgb[..., 0] << 16) | (rgb[..., 1] << 8) | rgb[..., 2]
-clicks = {"astronaut": (250, 300), "coffee": (300, 210), "chelsea": (220, 150), "rocket": (330, 250), "coins": (100, 60),
-          "camera": (230, 200), "stereo_motorcycle": (370, 290), "logo": (250, 250), "horse": (200, 150), "retina": (700, 900),
+clicks = {"astronaut": (350, 350), "coffee": (300, 210), "chelsea": (220, 150), "rocket": (330, 250), "coins": (100, 60),
+          "camera": (150, 250), "stereo_motorcycle": (406, 230), "logo": (250, 250), "horse": (200, 150), "retina": (700, 900),
           "page": (200, 100), "colorwheel": (185, 185), "clock": (200, 150), "moon": (256, 256), "cat": (220, 150),
           "hubble_deep_field": (500, 430), "immunohistochemistry": (256, 256), "text": (200, 80)}
 tiles = []

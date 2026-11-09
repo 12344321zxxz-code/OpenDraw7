@@ -773,6 +773,30 @@ class SelectTool(Tool):
         self.commit()
         self._select_mask(mask, alpha)
 
+    def subtract(self, pos: QPoint):
+        """Take the area under pos (the wand's colour area, or the whole object) out of the
+        selection."""
+        d = self.c.doc
+        if self.sel is None or not d.rect().contains(pos):
+            return
+        a = const_pixels(d.image)
+        if self.c.state.sel_mode == "object":
+            from .objectselect import background, select_object
+            key = (d.image.cacheKey(), d.width(), d.height())
+            if getattr(self, "_bg_key", None) != key:
+                self._bg_cache, self._bg_key = background(a), key
+            region, _alpha = select_object(a, pos.x(), pos.y(), self._bg_cache)
+            if region is None:
+                return
+        else:
+            region = flood_region(a, pos.x(), pos.y(), WAND_TOLERANCE)
+        soft = self.doc_soft() if self.sel.soft is not None else None
+        keep = self.doc_mask() & ~region
+        self.commit()
+        if soft is not None:
+            soft[region] = 0
+        self._select_mask(keep, soft)
+
     def _inside(self, pos):
         s = self.sel
         if not s.rect.contains(pos):
@@ -809,7 +833,16 @@ class SelectTool(Tool):
                 self.mode, self.handle = "resize", h
                 self.start_rect, self.press_pos = QRect(s.rect), ev.pos
                 return
-            wand_add = self.c.state.sel_mode in ("wand", "object") and ev.shift and s.image is None
+            picking = self.c.state.sel_mode in ("wand", "object") and s.image is None
+            if picking and ev.ctrl and not ev.shift:
+                # Ctrl+click takes the area out of the selection; Ctrl+drag still moves a copy
+                if self._inside(ev.pos):
+                    self.mode = "ctrl_pending"
+                    self.start_rect, self.press_pos = QRect(s.rect), ev.pos
+                else:
+                    self.subtract(ev.pos)
+                return
+            wand_add = picking and ev.shift
             if self._inside(ev.pos) and not wand_add:
                 self.mode = "move"
                 self.start_rect, self.press_pos = QRect(s.rect), ev.pos
@@ -856,6 +889,13 @@ class SelectTool(Tool):
         elif self.mode == "lasso":
             self.pts.append(QPointF(self._clamp(ev.pos)))
             self.c.viewport().update()
+        elif self.mode == "ctrl_pending":
+            d = ev.pos - self.press_pos
+            if abs(d.x()) + abs(d.y()) >= 3:          # a drag after all: move a copy
+                self.lift(copy=True)
+                self.mode = "move"
+                s.rect = self.start_rect.translated(d)
+                self.c.invalidate()
         elif self.mode == "move":
             d = ev.pos - self.press_pos
             if d.isNull() and s.image is None:
@@ -895,6 +935,8 @@ class SelectTool(Tool):
                     self.set_selection(br, path)
                     return
             self._notify()
+        elif mode == "ctrl_pending":
+            self.subtract(self.press_pos)
         elif mode in ("move", "resize"):
             self._notify()
 

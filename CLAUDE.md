@@ -47,8 +47,16 @@ packaged build and refuses to archive a build that fails.
   (a character cut off by the edge must not become background) and each has a measured spread
   (`REACH`), which keeps dark outlines out of a dark sky. Noisy pictures (photos) are decided on a
   lightly blurred copy with a noise-scaled step. Selections carry `Selection.soft`; `_piece()`
-  builds the cut-out for lift/copy. `tools/objsel/` has the scored test scenes and the photo sheet;
-  rerun `eval.py` after any change to the constants.
+  builds the cut-out for lift/copy. `tools/objsel/` has the scored scenes (`eval.py`), the random
+  benchmark (`bench.py`: tune on seeds 0-329, confirm on 1000-1329 which were never tuned on, and
+  compare versions per scene with `BENCH_DUMP`) and the photo sheet; rerun them after any change.
+  Edge colours (`edge_model`) are judged by share, spread around the edge and number of stretches
+  (patterns repeat all round, cut-off objects are bunched); a click on a bunched or partial edge
+  colour excludes it ("you clicked it, so it is an object"). Beyond an edge colour's reach the
+  background only drifts through truly smooth pixels (vignettes) - never on noisy pictures, where
+  blurring softens outlines too. On dark backgrounds, pixels darker than every background colour
+  near the object join its parts (a black outline on a navy sky). Ctrl+click subtracts (wand and
+  object modes); Ctrl+drag still copies.
 - `colordialog.py` Edit Colors, `helpwindow.py` Help, `keytips.py` Alt key tips, `recovery.py`
   autosave and crash recovery, `scanner.py` From scanner or camera.
 

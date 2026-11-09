@@ -724,6 +724,23 @@ c.copy()
 clip = QGuiApplication.clipboard().image()
 ok(not clip.isNull() and clip.size() == s.rect.size(), "copy an object selection")
 c.commit_pending()
+# ctrl+click takes an object out of the selection; ctrl+drag still moves a copy
+QTest.mouseClick(vpw, Qt.LeftButton, Qt.NoModifier, vp(150, 230))
+QTest.mouseClick(vpw, Qt.LeftButton, Qt.ShiftModifier, vp(330, 240))
+QTest.mouseClick(vpw, Qt.LeftButton, Qt.ControlModifier, vp(150, 230))
+app.processEvents()
+s = c.select_tool.sel
+ok(s is not None and s.rect.left() > 250 and s.soft is not None, "ctrl+click removes an object from the selection")
+QTest.mouseClick(vpw, Qt.LeftButton, Qt.ControlModifier, vp(330, 240))
+app.processEvents()
+ok(c.select_tool.sel is None, "removing the last object leaves nothing selected")
+QTest.mouseClick(vpw, Qt.LeftButton, Qt.NoModifier, vp(330, 240))
+app.processEvents()
+drag([(330, 240), (360, 240), (400, 240), (440, 240)], mods=Qt.ControlModifier)
+c.commit_pending()
+ok(QColor(doc.image.pixel(330, 240)).red() > 180 and QColor(doc.image.pixel(440, 240)).red() > 180,
+   "ctrl+drag on an object selection moves a copy")
+c.undo()
 st.set_sel_mode("rect")
 
 # ---- 0.2.1 regressions -----------------------------------------------------------------

@@ -177,6 +177,9 @@ def run(app) -> int:
         c.select_tool.object_select(QPoint(120, 95))
         s = c.select_tool.sel
         assert s is not None and s.soft is not None and 55 <= s.rect.left() <= 62
+        c.select_tool.subtract(QPoint(120, 95))
+        assert c.select_tool.sel is None
+        c.select_tool.object_select(QPoint(120, 95))
         c.select_tool.lift()
         c.commit_pending()
         st.set_sel_mode("rect")
