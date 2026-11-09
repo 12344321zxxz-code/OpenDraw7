@@ -7,8 +7,8 @@ import os
 import tempfile
 import traceback
 
-from PySide6.QtCore import QPoint, QPointF, QRect, QSize
-from PySide6.QtGui import QColor, QImage, QPainter, QGuiApplication
+from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, QSize
+from PySide6.QtGui import QColor, QImage, QPainter, QPen, QGuiApplication
 
 
 def run(app) -> int:
@@ -163,6 +163,25 @@ def run(app) -> int:
         assert len(doc.layers) == 1
         win.set_layers_pane(False)
     step("layers and OpenRaster", layers)
+
+    def object_sel():
+        doc.new(300, 200)
+        p = QPainter(doc.image)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        p.setPen(QPen(QColor(0, 0, 0), 3))
+        p.setBrush(QColor(240, 180, 60))
+        p.drawEllipse(QRectF(60, 40, 120, 110))
+        p.end()
+        st.set_tool("select")
+        st.set_sel_mode("object")
+        c.select_tool.object_select(QPoint(120, 95))
+        s = c.select_tool.sel
+        assert s is not None and s.soft is not None and 55 <= s.rect.left() <= 62
+        c.select_tool.lift()
+        c.commit_pending()
+        st.set_sel_mode("rect")
+        doc.new(800, 600)
+    step("object selection", object_sel)
 
     def text():
         st.set_tool("text")

@@ -39,6 +39,16 @@ packaged build and refuses to archive a build that fails.
   (`_layered`), keyed on `QImage.cacheKey()`. `layerspane.py` is the pane; anything that switches or
   changes layers must call `canvas.commit_pending()` first so a floating selection or shape lands on
   the layer it was made on.
+- Object selection (`objectselect.py`, Select > Object selection): background = grown in from the
+  picture's edges with edge-aware links (small colour step within reach of an edge colour, both ends
+  near an edge colour, or across a pixel that blends the background on its two sides, e.g. a
+  horizon); object = the non-background component under the click; soft rim alpha by projection
+  and colour decontamination in `cutout()`. Edge colours come only from long stretches of the edge
+  (a character cut off by the edge must not become background) and each has a measured spread
+  (`REACH`), which keeps dark outlines out of a dark sky. Noisy pictures (photos) are decided on a
+  lightly blurred copy with a noise-scaled step. Selections carry `Selection.soft`; `_piece()`
+  builds the cut-out for lift/copy. `tools/objsel/` has the scored test scenes and the photo sheet;
+  rerun `eval.py` after any change to the constants.
 - `colordialog.py` Edit Colors, `helpwindow.py` Help, `keytips.py` Alt key tips, `recovery.py`
   autosave and crash recovery, `scanner.py` From scanner or camera.
 

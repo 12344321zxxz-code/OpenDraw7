@@ -41,7 +41,8 @@ python run.py        # or: pip install . && opendraw7
 - **Shapes**: all 23 (line, curve, oval, rectangle, rounded rectangle, polygon, triangles, diamond,
   pentagon, hexagon, arrows, stars, callouts, heart, lightning) with the seven outline and fill
   styles. A shape stays adjustable (move, resize, recolor) until you click away.
-- **Selections**: rectangular, free-form and magic wand (Shift+click adds), move, Ctrl-drag to copy,
+- **Selections**: rectangular, free-form, magic wand and object selection (click a character to
+  select all of it without the background, with a clean soft edge; Shift+click adds), move, Ctrl-drag to copy,
   Shift-drag to leave a trail, resize by the handles,
   transparent selection, select all, invert selection, crop, delete.
 - **Image**: resize and skew, rotate and flip, invert color, canvas resize by its handles,

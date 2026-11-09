@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 
 from PySide6.QtCore import Qt, QPoint, QPointF, QRect, QRectF, QEvent, QSettings, QSize  # noqa: E402
 from PySide6.QtGui import QMouseEvent, QColor, QImage, QGuiApplication, QPainter, QPen  # noqa: E402
+import math  # noqa: E402,F811
 import numpy as np  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
 
@@ -652,6 +653,78 @@ lsaver.timer.stop()
 win.set_layers_pane(False)
 doc.new(800, 600)
 ok(len(doc.layers) == 1, "a new picture has one layer")
+
+# ---- object selection ---------------------------------------------------------------------
+def figure(p, cx, cy, s, body):
+    p.setPen(QPen(QColor(0, 0, 0), 3 * s))
+    p.setBrush(body)
+    p.drawRoundedRect(QRectF(cx - 28 * s, cy - 5 * s, 56 * s, 65 * s), 14 * s, 14 * s)
+    p.setBrush(QColor(255, 214, 170))
+    p.drawEllipse(QRectF(cx - 32 * s, cy - 70 * s, 64 * s, 64 * s))
+    for ex in (-12, 12):                     # white eyes with pupils: enclosed, same colour as the background
+        p.setPen(QPen(QColor(0, 0, 0), 2 * s))
+        p.setBrush(QColor(255, 255, 255))
+        p.drawEllipse(QRectF(cx + (ex - 7) * s, cy - 52 * s, 14 * s, 16 * s))
+
+
+st.set_color(1, QColor(0, 0, 0))
+st.set_color(2, QColor(255, 255, 255))
+doc.new(600, 400)
+pp = QPainter(doc.image)
+pp.setRenderHint(QPainter.Antialiasing, True)
+pp.fillRect(400, 0, 200, 400, QColor(255, 255, 255))
+figure(pp, 150, 200, 1.4, QColor(40, 90, 210))
+figure(pp, 330, 220, 1.0, QColor(220, 60, 60))
+pp.end()
+doc.changed.emit()
+c.set_zoom(1.0)
+st.set_tool("select")
+st.set_sel_mode("object")
+QTest.mouseClick(vpw, Qt.LeftButton, Qt.NoModifier, vp(150, 230))
+app.processEvents()
+s = c.select_tool.sel
+ok(s is not None and s.mask is not None and s.soft is not None, "object selection makes a soft-edged selection")
+r = s.rect
+ok(abs(r.left() - 103) <= 3 and abs(r.right() - 197) <= 3 and abs(r.top() - 100) <= 3 and abs(r.bottom() - 286) <= 3,
+   f"object selection covers the whole first figure ({r.left()},{r.top()})-({r.right()},{r.bottom()})")
+ok(bool(s.mask[133 - r.top(), 133 - r.left()]), "the enclosed white eye is part of the object")
+ok(not s.mask[110 - r.top(), 110 - r.left()] if r.contains(QPoint(110, 110)) else True,
+   "the background beside the head is not part of the object")
+# move it onto a red area: no white fringe
+pp = QPainter(doc.image)
+pp.fillRect(420, 0, 180, 400, QColor(255, 0, 0))
+pp.end()
+doc.changed.emit()
+drag([(150, 230), (300, 230), (450 + 0, 230)])
+c.commit_pending()
+a_ = const_pixels(doc.image).astype(np.int64)
+reg = a_[100:290, 424:500]                   # the part that landed on red
+R_, G_, B_ = (reg >> 16) & 255, (reg >> 8) & 255, reg & 255
+whitish = (G_ > 150) & (B_ > 150) & (np.abs(G_ - B_) < 25)     # skin and body colours are not whitish
+eyes = np.zeros_like(whitish)
+eyes[20:50, :] = True                                             # rows of the white eyes
+ok(int((whitish & ~eyes).sum()) < 10,
+   "a moved object carries no fringe of the old background")
+ok(px(150, 230) == WHITE, "the old place is filled with colour 2")
+c.undo()
+ok(px(150, 230) == "#2a5bd2" or QColor(doc.image.pixel(150, 230)).blue() > 150, "undo the move")
+# shift+click adds the other figure; clicking the background takes every object
+QTest.mouseClick(vpw, Qt.LeftButton, Qt.NoModifier, vp(150, 230))
+QTest.mouseClick(vpw, Qt.LeftButton, Qt.ShiftModifier, vp(330, 240))
+app.processEvents()
+s = c.select_tool.sel
+ok(s is not None and s.rect.left() <= 105 and s.rect.right() >= 355, "shift+click adds another object")
+c.commit_pending()
+QTest.mouseClick(vpw, Qt.LeftButton, Qt.NoModifier, vp(20, 20))
+app.processEvents()
+s = c.select_tool.sel
+ok(s is not None and s.rect.left() <= 105 and s.rect.right() >= 355 and s.rect.right() < 420,
+   "clicking the background selects every object")
+c.copy()
+clip = QGuiApplication.clipboard().image()
+ok(not clip.isNull() and clip.size() == s.rect.size(), "copy an object selection")
+c.commit_pending()
+st.set_sel_mode("rect")
 
 # ---- 0.2.1 regressions -----------------------------------------------------------------
 from PySide6.QtWidgets import QMessageBox  # noqa: E402

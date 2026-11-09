@@ -49,6 +49,11 @@ bottom row of the palette.</p>"""),
 <li><b>Free-form selection</b>: draw around the part you want.</li>
 <li><b>Magic wand selection</b>: click an area to select all the connected pixels of a similar
 colour. Hold <b>Shift</b> and click more areas to add them to the selection.</li>
+<li><b>Object selection</b>: click a character or object to select all of it without the
+background: every colour in it, enclosed details such as eyes, and its soft edge. Paint works out the
+background from the colours along the picture's edges. Hold <b>Shift</b> and click another object to
+add it; click the background to select every object. It works best on drawings and on photos with a
+plain or smooth background.</li>
 </ul>
 <p>Drag a selection to move it. Hold <b>Ctrl</b> while dragging to move a copy and leave the original
 where it was. Hold <b>Shift</b> while dragging to leave a trail of copies behind. The arrow keys move a

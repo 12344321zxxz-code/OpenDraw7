@@ -661,6 +661,40 @@ def _(p):
     p.drawPolygon(poly(7.5, 11, 11, 7.5, 9, 7.5, 9, 5, 6, 5, 6, 7.5, 4, 7.5))
 
 
+def _object_sel(p, k):
+    """A little figure with a dashed selection outline hugging it; k scales the 16px drawing."""
+    p.save()
+    p.scale(k, k)
+    p.setRenderHint(QPainter.Antialiasing, True)
+    fig = QPainterPath()
+    fig.addEllipse(QRectF(5.6, 1.6, 4.8, 4.8))
+    fig.addRoundedRect(QRectF(4.2, 6.6, 7.6, 7.0), 2.2, 2.2)
+    fig = fig.simplified()
+    p.setPen(pen("#1f3f6e", 0.9))
+    p.setBrush(lg(0, 1, 0, 14, (0, "#7fb2ea"), (1, "#2c6cc0")))
+    p.drawPath(fig)
+    out = QPainterPath()
+    out.addEllipse(QRectF(4.1, 0.3, 7.8, 7.6))
+    out.addRoundedRect(QRectF(2.6, 5.2, 10.8, 10.0), 3.0, 3.0)
+    out = out.simplified()
+    dash = QPen(QColor("#202020"), 0.9 if k < 1.5 else 0.7)
+    dash.setDashPattern([2.0, 1.6])
+    p.setPen(dash)
+    p.setBrush(Qt.NoBrush)
+    p.drawPath(out)
+    p.restore()
+
+
+@icon_fn("sel_object")
+def _(p):
+    _object_sel(p, 1.0)
+
+
+@icon_fn("select_object32", 32)
+def _(p):
+    _object_sel(p, 2.0)
+
+
 @icon_fn("sel_all")
 def _(p):
     _dashed_rect(p, QRectF(1.5, 1.5, 13, 13), fill=QColor("#bcd8f6"))

@@ -452,6 +452,7 @@ class MainWindow(QWidget):
         m.add_item("Rectangular selection", "sel_rect", lambda: self._set_sel_mode("rect"))
         m.add_item("Free-form selection", "sel_free", lambda: self._set_sel_mode("free"))
         m.add_item("Magic wand selection", "sel_wand", lambda: self._set_sel_mode("wand"))
+        m.add_item("Object selection", "sel_object", lambda: self._set_sel_mode("object"))
         m.add_header("Selection options")
         m.add_item("Select all", "sel_all", c.select_all, shortcut="Ctrl+A")
         m.add_item("Invert selection", "sel_invert", c.invert_selection, enabled=c.has_selection())
@@ -716,7 +717,7 @@ class MainWindow(QWidget):
         self.q_undo.setEnabled(d.can_undo() or c.tool.has_pending())
         self.q_redo.setEnabled(d.can_redo())
         self.select_btn.setChecked(st.tool == "select")
-        self.select_btn.set_icon({"free": "select_free32", "wand": "select_wand32"}.get(st.sel_mode, "select32"))
+        self.select_btn.set_icon({"free": "select_free32", "wand": "select_wand32", "object": "select_object32"}.get(st.sel_mode, "select32"))
         for tid, b in self.tool_btns.items():
             b.setChecked(st.tool == tid)
         self.brush_btn.setChecked(st.tool == "brush")

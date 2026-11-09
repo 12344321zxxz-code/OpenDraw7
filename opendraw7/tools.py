@@ -319,10 +319,11 @@ class MagnifierTool(Tool):
 
 # ---------------------------------------------------------------- selection --
 class Selection:
-    def __init__(self, rect: QRect, path=None, image=None, mask=None):
+    def __init__(self, rect: QRect, path=None, image=None, mask=None, soft=None):
         self.rect = QRect(rect)
         self.path = path          # QPainterPath in local coords, or None for the whole rect
         self.mask = mask          # bool array (h, w) in local coords (magic wand), or None
+        self.soft = soft          # float32 opacity (h, w) for soft edges (object selection), or None
         self.image = image        # lifted pixels (ARGB premultiplied) or None
         self.version = 0
         self._edges = None
@@ -404,8 +405,8 @@ class SelectTool(Tool):
         self.c.stateChanged.emit()
         self.c.invalidate()
 
-    def set_selection(self, rect, path=None, image=None, mask=None):
-        self.sel = Selection(rect, path, image, mask)
+    def set_selection(self, rect, path=None, image=None, mask=None, soft=None):
+        self.sel = Selection(rect, path, image, mask, soft)
         self.mode = None
         self._notify()
 
@@ -420,6 +421,40 @@ class SelectTool(Tool):
             p = QPainter(img)
             p.fillPath(self._local_path(), QColor(255, 255, 255))
             p.end()
+        return img
+
+    def _piece(self, s) -> QImage:
+        """The selected pixels of the picture (not yet lifted), clear outside the selection. A soft
+        selection keeps its soft edge with the background's tint taken out."""
+        r = s.rect
+        doc = self.c.doc
+        if s.soft is not None:
+            from .objectselect import cutout
+            m = 3                                      # context around it, to see the background
+            big = r.adjusted(-m, -m, m, m).intersected(doc.rect())
+            a = const_pixels(doc.image)[big.top():big.bottom() + 1, big.left():big.right() + 1]
+            mask = np.zeros(a.shape, dtype=bool)
+            soft = np.zeros(a.shape, dtype=np.float32)
+            oy, ox = r.top() - big.top(), r.left() - big.left()
+            vis = r.intersected(big)
+            ly0, lx0 = vis.top() - r.top(), vis.left() - r.left()
+            hh, ww = vis.height(), vis.width()
+            mask[oy + ly0:oy + ly0 + hh, ox + lx0:ox + lx0 + ww] = s.mask[ly0:ly0 + hh, lx0:lx0 + ww]
+            soft[oy + ly0:oy + ly0 + hh, ox + lx0:ox + lx0 + ww] = s.soft[ly0:ly0 + hh, lx0:lx0 + ww]
+            cut = cutout(a, mask, soft)
+            img = QImage(r.size(), ALPHA_FMT)
+            img.fill(0)
+            px = pixels(img)
+            px[ly0:ly0 + hh, lx0:lx0 + ww] = cut[oy + ly0:oy + ly0 + hh, ox + lx0:ox + lx0 + ww]
+            return img
+        img = QImage(r.size(), ALPHA_FMT)
+        img.fill(0)
+        p = QPainter(img)
+        p.drawImage(0, 0, doc.image, r.x(), r.y(), r.width(), r.height())
+        if s.shaped():
+            p.setCompositionMode(QPainter.CompositionMode_DestinationIn)
+            p.drawImage(0, 0, self._mask_image(s))
+        p.end()
         return img
 
     def _erase_area(self, s):
@@ -460,15 +495,7 @@ class SelectTool(Tool):
             return
         doc = self.c.doc
         doc.push_undo()
-        r = s.rect
-        img = QImage(r.size(), QImage.Format_ARGB32_Premultiplied)
-        img.fill(0)
-        p = QPainter(img)
-        p.drawImage(0, 0, doc.image, r.x(), r.y(), r.width(), r.height())
-        if s.shaped():
-            p.setCompositionMode(QPainter.CompositionMode_DestinationIn)
-            p.drawImage(0, 0, self._mask_image(s))
-        p.end()
+        img = self._piece(s)
         if not copy:
             self._erase_area(s)
         s.image = img
@@ -499,6 +526,7 @@ class SelectTool(Tool):
             s.image = s.image.scaled(s.rect.size(), Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
             s.path = None
             s.mask = None
+            s.soft = None
             s.version += 1
 
     def composite(self):
@@ -570,10 +598,7 @@ class SelectTool(Tool):
         if s.image is not None:
             p.drawImage(0, 0, self.floating())
         else:
-            p.drawImage(0, 0, self.c.doc.image, s.rect.x(), s.rect.y(), s.rect.width(), s.rect.height())
-            if s.shaped():
-                p.setCompositionMode(QPainter.CompositionMode_DestinationIn)
-                p.drawImage(0, 0, self._mask_image(s))
+            p.drawImage(0, 0, self._piece(s))
         p.end()
         if bg is None:
             return piece
@@ -648,6 +673,7 @@ class SelectTool(Tool):
         s.image = img
         s.path = None
         s.mask = None
+        s.soft = None
         s.rect = QRect(s.rect.topLeft(), img.size())
         s.version += 1
         self._notify()
@@ -675,8 +701,9 @@ class SelectTool(Tool):
                 vis.top() - r.top():vis.bottom() + 1 - r.top(), vis.left() - r.left():vis.right() + 1 - r.left()]
         return out
 
-    def _select_mask(self, m):
-        """Select the pixels of a picture-sized mask (nothing if it is empty)."""
+    def _select_mask(self, m, soft=None):
+        """Select the pixels of a picture-sized mask (nothing if it is empty); soft, if given, is a
+        picture-sized opacity for a soft edge."""
         ys = np.flatnonzero(m.any(axis=1))
         if not len(ys):
             self.sel = None
@@ -686,10 +713,13 @@ class SelectTool(Tool):
         y0, y1, x0, x1 = int(ys[0]), int(ys[-1]), int(xs[0]), int(xs[-1])
         local = np.ascontiguousarray(m[y0:y1 + 1, x0:x1 + 1])
         rect = QRect(x0, y0, x1 - x0 + 1, y1 - y0 + 1)
-        if local.all():
+        lsoft = None if soft is None else np.ascontiguousarray(soft[y0:y1 + 1, x0:x1 + 1])
+        if lsoft is not None and (lsoft[local] >= 0.999).all():
+            lsoft = None
+        if local.all() and lsoft is None:
             self.set_selection(rect)
         else:
-            self.set_selection(rect, mask=local)
+            self.set_selection(rect, mask=local, soft=lsoft)
 
     def wand(self, pos: QPoint, add=False):
         """Select the area of similar colour around pos; with add, join it to the selection."""
@@ -701,6 +731,47 @@ class SelectTool(Tool):
             region |= self.doc_mask()
         self.commit()
         self._select_mask(region)
+
+    def doc_soft(self):
+        """Current selection's opacity as a picture-sized float array (1 where hard-selected)."""
+        m = self.doc_mask().astype(np.float32)
+        s = self.sel
+        if s is not None and s.soft is not None and s.image is None:
+            r = s.rect.intersected(self.c.doc.rect())
+            if not r.isEmpty():
+                m[r.top():r.bottom() + 1, r.left():r.right() + 1] = s.soft[
+                    r.top() - s.rect.top():r.bottom() + 1 - s.rect.top(),
+                    r.left() - s.rect.left():r.right() + 1 - s.rect.left()]
+        return m
+
+    def object_select(self, pos: QPoint, add=False):
+        """Select the whole object under pos (everything connected to it that is not background),
+        with a soft edge; clicking the background selects every object. With add, join it to the
+        selection."""
+        from .objectselect import background, select_object
+        d = self.c.doc
+        if not d.rect().contains(pos):
+            return
+        QGuiApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            a = const_pixels(d.image)
+            key = (d.image.cacheKey(), d.width(), d.height())
+            if getattr(self, "_bg_key", None) != key:
+                self._bg_cache, self._bg_key = background(a), key
+            mask, alpha = select_object(a, pos.x(), pos.y(), self._bg_cache)
+        finally:
+            QGuiApplication.restoreOverrideCursor()
+        if mask is None:
+            if not add:
+                self.commit()
+                self.sel = None
+                self._notify()
+            return
+        if add and self.sel is not None:
+            alpha = np.maximum(alpha, self.doc_soft())
+            mask = mask | self.doc_mask()
+        self.commit()
+        self._select_mask(mask, alpha)
 
     def _inside(self, pos):
         s = self.sel
@@ -738,7 +809,7 @@ class SelectTool(Tool):
                 self.mode, self.handle = "resize", h
                 self.start_rect, self.press_pos = QRect(s.rect), ev.pos
                 return
-            wand_add = self.c.state.sel_mode == "wand" and ev.shift and s.image is None
+            wand_add = self.c.state.sel_mode in ("wand", "object") and ev.shift and s.image is None
             if self._inside(ev.pos) and not wand_add:
                 self.mode = "move"
                 self.start_rect, self.press_pos = QRect(s.rect), ev.pos
@@ -757,6 +828,9 @@ class SelectTool(Tool):
                 self.commit()
         if self.c.state.sel_mode == "wand":
             self.wand(ev.pos, add=ev.shift)
+            return
+        if self.c.state.sel_mode == "object":
+            self.object_select(ev.pos, add=ev.shift)
             return
         self.anchor = self._clamp(ev.pos)
         self.cur = QRect()
@@ -901,7 +975,7 @@ class SelectTool(Tool):
             h = hit_handle(self._outline(), ev.view)
             if h is not None:
                 return QCursor(HANDLE_CURSORS[h])
-            if self._inside(ev.pos) and not (self.c.state.sel_mode == "wand" and ev.shift):
+            if self._inside(ev.pos) and not (self.c.state.sel_mode in ("wand", "object") and ev.shift):
                 return QCursor(Qt.SizeAllCursor)
         return icons.cursor("cross")
 
