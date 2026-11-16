@@ -743,6 +743,169 @@ ok(QColor(doc.image.pixel(330, 240)).red() > 180 and QColor(doc.image.pixel(440,
 c.undo()
 st.set_sel_mode("rect")
 
+# ---- polygon selection (0.3.3) -----------------------------------------------------------
+def click(x, y, mods=Qt.NoModifier, button=Qt.LeftButton):
+    QTest.mouseClick(vpw, button, mods, vp(x, y))
+    app.processEvents()
+
+
+def hover(x, y, mods=Qt.NoModifier):
+    app.sendEvent(vpw, QMouseEvent(QEvent.MouseMove, QPointF(vp(x, y)), QPointF(vpw.mapToGlobal(vp(x, y))),
+                                   Qt.NoButton, Qt.NoButton, mods))
+    app.processEvents()
+
+
+doc.new(400, 300)
+RED = QColor(200, 30, 30)
+doc.image.fill(RED)
+doc.changed.emit()
+st.set_color(2, QColor(255, 255, 255))
+st.set_sel_mode("poly")
+st.set_tool("select")
+sel = c.select_tool
+click(50, 50)
+ok(sel.building and len(sel.poly) == 1 and sel.sel is None, "first click starts a polygon selection")
+hover(120, 80)
+ok(sel.poly_cur == QPoint(120, 80), "the next side follows the mouse between clicks")
+click(150, 50)
+click(50, 150)
+ok(len(sel.poly) == 3 and sel.building, "each click adds a corner")
+hover(51, 51)
+ok(sel.hover_closes(), "the first corner lights up under the mouse")
+vpw.repaint()
+click(51, 51)
+ok(not sel.building and sel.sel is not None and sel.sel.rect == QRect(50, 50, 100, 100)
+   and sel.sel.path is not None and len(sel.sel.outline) == 3, "clicking the first corner closes the polygon")
+vpw.repaint()
+QTest.keyClick(c, Qt.Key_Delete)
+ok(px(60, 60) == WHITE and px(140, 140) == RED.name() and px(40, 40) == RED.name(),
+   "delete clears the polygon, not its bounding rectangle")
+c.undo()
+ok(px(60, 60) == RED.name(), "undo brings the deleted polygon back")
+# double-click closes
+for pt in ((200, 50), (300, 50), (300, 150)):
+    click(*pt)
+QTest.mouseClick(vpw, Qt.LeftButton, Qt.NoModifier, vp(200, 150))
+QTest.mouseDClick(vpw, Qt.LeftButton, Qt.NoModifier, vp(200, 150))
+app.processEvents()
+ok(not sel.building and sel.sel is not None and sel.sel.rect == QRect(200, 50, 100, 100),
+   "double-click closes the polygon")
+# moving it moves only the polygon's pixels
+doc.image.fill(RED)
+drag([(250, 100), (250, 150), (250, 200)])
+c.commit_pending()
+ok(px(250, 60) == WHITE and px(250, 260) == RED.name(), "a polygon selection can be moved")
+c.undo()
+ok(px(250, 60) == RED.name(), "undo of the move")
+# Enter, Backspace, Ctrl+Z, Esc, right-click
+for pt in ((20, 200), (80, 200), (80, 260), (20, 260)):
+    click(*pt)
+QTest.keyClick(c, Qt.Key_Backspace)
+ok(sel.building and len(sel.poly) == 3, "backspace takes back the last corner")
+can = doc.can_undo()
+before = QImage(doc.image)
+c.undo()
+ok(sel.building and len(sel.poly) == 2 and doc.image == before and doc.can_undo() == can,
+   "ctrl+z takes back a corner instead of undoing the picture")
+ok(win.q_undo.isEnabled(), "undo is available while a polygon is being made")
+click(80, 260)
+QTest.keyClick(c, Qt.Key_Return)
+ok(not sel.building and sel.sel is not None and sel.sel.rect == QRect(20, 200, 60, 60), "enter closes the polygon")
+QTest.keyClick(c, Qt.Key_Escape)
+ok(sel.sel is None, "esc drops the selection")
+click(20, 20)
+click(60, 20)
+QTest.keyClick(c, Qt.Key_Return)
+ok(not sel.building and sel.sel is None, "two corners select nothing")
+click(20, 20)
+click(60, 20)
+click(60, 60)
+QTest.keyClick(c, Qt.Key_Escape)
+ok(not sel.building and sel.sel is None and not sel.poly, "esc cancels a polygon being made")
+click(20, 20)
+click(60, 20)
+click(60, 60, button=Qt.RightButton)
+ok(not sel.building and sel.sel is None, "right-click cancels a polygon being made")
+click(20, 20)
+QTest.keyClick(c, Qt.Key_Backspace)
+ok(not sel.building, "backspace on the only corner cancels")
+# Shift keeps sides straight or at 45 degrees
+click(100, 100)
+click(200, 108, mods=Qt.ShiftModifier)
+click(260, 175, mods=Qt.ShiftModifier)
+click(262, 280, mods=Qt.ShiftModifier)
+ok(sel.poly[1] == QPoint(200, 100) and sel.poly[2].x() - 200 == sel.poly[2].y() - 100
+   and sel.poly[3].x() == sel.poly[2].x(), "shift snaps sides to straight and 45-degree lines")
+st.set_sel_mode("rect")
+ok(not sel.building and not sel.poly, "changing the selection shape drops the unfinished polygon")
+st.set_sel_mode("poly")
+click(100, 100)
+click(200, 100)
+st.set_tool("pencil")
+ok(not sel.building, "changing tool drops the unfinished polygon")
+st.set_tool("select")
+# corners outside the picture are pulled in; a line selects nothing
+drag([(350, 250), (500, 250)])
+click(500, 400)
+QTest.keyClick(c, Qt.Key_Return)
+ok(sel.sel is not None and sel.sel.rect == QRect(350, 250, 50, 50), "corners stay inside the picture")
+QTest.keyClick(c, Qt.Key_Escape)
+click(10, 10)
+click(50, 50)
+click(90, 90)
+QTest.keyClick(c, Qt.Key_Return)
+ok(sel.sel is None, "three corners in a line select nothing")
+# on a layer: delete clears to see-through
+doc.add_layer()
+doc.image.fill(QColor(0, 0, 255))
+doc.changed.emit()
+for pt in ((100, 100), (200, 100), (100, 200)):
+    click(*pt)
+QTest.keyClick(c, Qt.Key_Return)
+QTest.keyClick(c, Qt.Key_Delete)
+ok((doc.image.pixel(110, 110) >> 24) == 0
+   and (doc.image.pixel(190, 190) >> 24) == 255, "polygon delete on a layer clears to see-through")
+ok(QColor(c.display_image().pixel(110, 110)).name() == RED.name(), "the layer below shows through the hole")
+c.undo()
+c.undo()
+ok(len(doc.layers) == 1, "undo removes the layer again")
+c.invert_selection()
+for pt in ((100, 100), (200, 100), (100, 200)):
+    click(*pt)
+QTest.keyClick(c, Qt.Key_Return)
+c.invert_selection()
+ok(sel.sel is not None and sel.sel.rect == doc.rect(), "invert a polygon selection")
+QTest.keyClick(c, Qt.Key_Delete)
+ok(px(110, 110) == RED.name() and px(190, 190) == WHITE and px(5, 5) == WHITE, "delete everything but the polygon")
+c.undo()
+st.set_sel_mode("rect")
+
+# ---- polygon shape: preview line, backspace, shift (0.3.3) --------------------------------
+doc.new(400, 300)
+st.set_tool("shape", shape="polygon")
+st.set_color(1, QColor(0, 0, 0))
+tool = c.tool
+drag([(50, 50), (150, 50)])
+shown = int((const_pixels(c.display_image()) != 0xFFFFFFFF).sum())
+hover(150, 150)
+ok(int((const_pixels(c.display_image()) != 0xFFFFFFFF).sum()) > shown * 1.5 and ink() == 0,
+   "polygon shape: the next side follows the mouse between clicks")
+click(150, 150)
+click(52, 157, mods=Qt.ShiftModifier)
+ok(tool.pts[-1] == QPoint(52, 150), "polygon shape: shift keeps the side straight")
+QTest.keyClick(c, Qt.Key_Backspace)
+ok(len(tool.pts) == 3 and tool.has_pending(), "polygon shape: backspace takes back the last corner")
+hover(300, 280)
+QTest.keyClick(c, Qt.Key_Return)
+ok(not tool.has_pending() and ink() > 0 and px(300, 280) == WHITE and px(250, 240) == WHITE,
+   "polygon shape: the preview side is not drawn into the picture")
+c.undo()
+ok(ink() == 0, "polygon shape undo")
+click(50, 50)
+QTest.keyClick(c, Qt.Key_Backspace)
+ok(not tool.pts, "polygon shape: backspace on the only corner cancels")
+st.set_tool("select")
+
 # ---- 0.2.1 regressions -----------------------------------------------------------------
 from PySide6.QtWidgets import QMessageBox  # noqa: E402
 from PySide6.QtGui import QKeyEvent  # noqa: E402

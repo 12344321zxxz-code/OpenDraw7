@@ -134,6 +134,11 @@ class Tool:
     def wants_shortcut(self, e):
         return False
 
+    def step_back(self):
+        """Undo one step of something still being put together (a polygon selection's last
+        corner) instead of an edit to the picture; False if there is nothing like that."""
+        return False
+
     def composite(self):
         return None
 
@@ -325,6 +330,7 @@ class Selection:
         self.mask = mask          # bool array (h, w) in local coords (magic wand), or None
         self.soft = soft          # float32 opacity (h, w) for soft edges (object selection), or None
         self.image = image        # lifted pixels (ARGB premultiplied) or None
+        self.outline = None       # corner points in local coords (polygon selection), drawn until lifted
         self.version = 0
         self._edges = None
 
@@ -372,6 +378,18 @@ def path_mask(path: QPainterPath, w: int, h: int):
     return (const_pixels(img) >> 24) >= 128
 
 
+def snap45(a: QPoint, b: QPoint) -> QPoint:
+    """b moved onto the nearest horizontal, vertical or 45-degree line through a."""
+    dx, dy = b.x() - a.x(), b.y() - a.y()
+    k = int(round(math.atan2(dy, dx) / (math.pi / 4))) % 8
+    if k in (0, 4):
+        return QPoint(b.x(), a.y())
+    if k in (2, 6):
+        return QPoint(a.x(), b.y())
+    m = (abs(dx) + abs(dy)) // 2
+    return QPoint(a.x() + (m if k in (1, 7) else -m), a.y() + (m if k in (1, 3) else -m))
+
+
 class SelectTool(Tool):
     def __init__(self, canvas):
         super().__init__(canvas)
@@ -380,6 +398,9 @@ class SelectTool(Tool):
         self.anchor = None
         self.cur = None
         self.pts = []
+        self.poly = []            # corners of a polygon selection being made (mode "poly")
+        self.poly_cur = None      # where the next corner would go (follows the mouse)
+        self.poly_drag = False
         self.handle = None
         self.start_rect = None
         self.press_pos = None
@@ -392,6 +413,11 @@ class SelectTool(Tool):
 
     def has_pending(self):
         return self.sel is not None
+
+    @property
+    def building(self):
+        """A polygon selection is being clicked together."""
+        return self.mode == "poly"
 
     # -- helpers -------------------------------------------------------------
     def _clamp(self, pt: QPoint, inclusive=True):
@@ -408,6 +434,7 @@ class SelectTool(Tool):
     def set_selection(self, rect, path=None, image=None, mask=None, soft=None):
         self.sel = Selection(rect, path, image, mask, soft)
         self.mode = None
+        self._poly_clear()
         self._notify()
 
     def _mask_image(self, s) -> QImage:
@@ -541,8 +568,12 @@ class SelectTool(Tool):
 
     def commit(self):
         s = self.sel
+        building = self.mode == "poly"
         self.mode = None
+        self._poly_clear()
         if s is None:
+            if building:
+                self._notify()
             return
         if s.image is not None:
             p = QPainter(self.c.doc.image)
@@ -812,11 +843,76 @@ class SelectTool(Tool):
         p.drawImage(s.rect.topLeft(), self.floating())
         p.end()
 
+    # -- polygon selection ---------------------------------------------------
+    def _poly_clear(self):
+        self.poly = []
+        self.poly_cur = None
+        self.poly_drag = False
+
+    def _poly_point(self, ev):
+        pt = self._clamp(ev.pos)
+        if ev.shift and self.poly:
+            pt = self._clamp(snap45(self.poly[-1], pt))
+        return pt
+
+    def _poly_closes(self, ev):
+        """The mouse is on the first corner, where a click closes the polygon."""
+        if len(self.poly) < 3:
+            return False
+        a = self.c.to_view(QPointF(self.poly[0]))
+        return math.hypot(ev.view.x() - a.x(), ev.view.y() - a.y()) <= 6
+
+    def poly_close(self):
+        """Turn the corners clicked so far into the selection."""
+        pts = self.poly
+        self.mode = None
+        self._poly_clear()
+        if len(pts) >= 3:
+            poly = QPolygonF([QPointF(pt) for pt in pts])
+            br = poly.boundingRect().toAlignedRect().intersected(self.c.doc.rect())
+            if br.width() >= 1 and br.height() >= 1:
+                path = QPainterPath()
+                path.setFillRule(Qt.WindingFill)
+                path.addPolygon(poly)
+                path.closeSubpath()
+                path.translate(-br.left(), -br.top())
+                if path_mask(path, br.width(), br.height()).any():
+                    self.set_selection(br, path)
+                    self.sel.outline = [QPointF(pt.x() - br.left(), pt.y() - br.top()) for pt in pts]
+                    return
+        self._notify()
+
+    def step_back(self):
+        """Take back the last corner of a polygon selection being made."""
+        if self.mode != "poly":
+            return False
+        if self.poly_drag or len(self.poly) <= 1:
+            self.mode = None
+            self._poly_clear()
+        else:
+            self.poly.pop()
+        self._notify()
+        return True
+
+    def double_click(self, ev):
+        if self.mode == "poly":
+            self.poly_close()
+
     # -- mouse ---------------------------------------------------------------
     def _outline(self):
         return outline_of(self.c.view_rect(self.sel.rect))
 
     def press(self, ev):
+        if self.mode == "poly":
+            if ev.button == R:
+                self.mode = None
+                self._poly_clear()
+                self._notify()
+            elif ev.button == L:
+                self.poly_cur = self._poly_point(ev)
+                self.poly_drag = True
+                self.c.viewport().update()
+            return
         if ev.button == R:
             if self.mode in ("rubber", "lasso"):
                 self.mode = None
@@ -870,12 +966,21 @@ class SelectTool(Tool):
         if self.c.state.sel_mode == "free":
             self.mode = "lasso"
             self.pts = [QPointF(self.anchor)]
+        elif self.c.state.sel_mode == "poly":
+            self.mode = "poly"
+            self.poly = [QPoint(self.anchor)]
+            self.poly_cur = QPoint(self.anchor)
+            self.poly_drag = True
+            self.c.stateChanged.emit()
         else:
             self.mode = "rubber"
 
     def move(self, ev):
         s = self.sel
-        if self.mode == "rubber":
+        if self.mode == "poly":
+            self.poly_cur = self._poly_point(ev)
+            self.c.viewport().update()
+        elif self.mode == "rubber":
             pt = self._clamp(ev.pos)
             dx, dy = pt.x() - self.anchor.x(), pt.y() - self.anchor.y()
             if ev.shift:
@@ -917,6 +1022,20 @@ class SelectTool(Tool):
     def release(self, ev):
         if ev.button != L:
             return
+        if self.mode == "poly":
+            if not self.poly_drag:
+                return
+            self.poly_drag = False
+            if self._poly_closes(ev):
+                self.poly_close()
+                return
+            pt = self._poly_point(ev)
+            if pt != self.poly[-1]:
+                self.poly.append(pt)
+            self.poly_cur = pt
+            self.c.stateChanged.emit()
+            self.c.viewport().update()
+            return
         mode, self.mode = self.mode, None
         if mode == "rubber":
             if self.cur.width() >= 1 and self.cur.height() >= 1:
@@ -943,6 +1062,16 @@ class SelectTool(Tool):
     def key(self, e):
         s = self.sel
         k = e.key()
+        if self.mode == "poly":
+            if k in (Qt.Key_Return, Qt.Key_Enter):
+                self.poly_close()
+            elif k == Qt.Key_Backspace:
+                self.step_back()
+            elif k in (Qt.Key_Escape, Qt.Key_Delete):
+                self.commit()
+            else:
+                return False
+            return True
         if s is None:
             return False
         if k == Qt.Key_Delete:
@@ -978,13 +1107,54 @@ class SelectTool(Tool):
             p.setPen(pen)
             p.drawPolyline(QPolygonF(pts))
             p.restore()
+        elif self.mode == "poly" and self.poly:
+            pts = [c.to_view(QPointF(pt)) for pt in self.poly]
+            line = list(pts)
+            if self.poly_cur is not None:
+                line.append(c.to_view(QPointF(self.poly_cur)))
+            closing = self.hover_closes()
+            if closing:
+                line[-1] = pts[0]
+            self._paint_poly(p, line, False)
+            p.save()
+            p.setRenderHint(QPainter.Antialiasing, False)
+            for i, v in enumerate(pts):
+                # the first corner is the one to click to close; it lights up when the mouse is on it
+                k = 3 if i == 0 else 2
+                p.setPen(QPen(QColor("#3399ff") if i == 0 and closing else QColor(85, 85, 85), 1))
+                p.setBrush(QColor("#3399ff") if i == 0 and closing else QColor(255, 255, 255))
+                p.drawRect(int(round(v.x())) - k, int(round(v.y())) - k, 2 * k, 2 * k)
+            p.restore()
         if self.sel is not None:
             s = self.sel
             if s.mask is not None and s.image is None:
                 self._paint_edges(p, s)
+            elif s.outline is not None and s.image is None:
+                tl = QPointF(s.rect.topLeft())
+                self._paint_poly(p, [c.to_view(pt + tl) for pt in s.outline], True)
             o = self._outline()
             draw_dashed(p, o)
             draw_handles(p, handle_points(o))
+
+    def hover_closes(self):
+        ev = self.c.hover
+        return self.mode == "poly" and ev is not None and self._poly_closes(ev)
+
+    def _paint_poly(self, p, pts, closed):
+        """Dashed outline through view points."""
+        if len(pts) < 2:
+            return
+        poly = QPolygonF(pts + pts[:1] if closed else pts)
+        p.save()
+        p.setRenderHint(QPainter.Antialiasing, False)
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(QColor(255, 255, 255), 1))
+        p.drawPolyline(poly)
+        pen = QPen(QColor(0, 0, 0), 1)
+        pen.setDashPattern([3, 3])
+        p.setPen(pen)
+        p.drawPolyline(poly)
+        p.restore()
 
     def _paint_edges(self, p, s):
         c = self.c
@@ -1013,7 +1183,7 @@ class SelectTool(Tool):
 
     def cursor(self, ev):
         s = self.sel
-        if s is not None and self.mode not in ("rubber", "lasso"):
+        if s is not None and self.mode not in ("rubber", "lasso", "poly"):
             h = hit_handle(self._outline(), ev.view)
             if h is not None:
                 return QCursor(HANDLE_CURSORS[h])
@@ -1384,32 +1554,43 @@ class PolygonTool(ShapeBase):
         else:
             self._render(target, path, self.left, False)
 
+    def _point(self, ev):
+        """Where the next corner goes: the mouse, or with Shift the nearest straight or 45-degree
+        line from the last corner."""
+        pt = QPoint(ev.pos)
+        if ev.shift and self.pts:
+            pt = snap45(self.pts[-1], pt)
+        return pt
+
     def press(self, ev):
         if ev.button not in (L, R):
             return
         if not self.pts:
             self.pts = [QPoint(ev.pos)]
             self.left = ev.button == L
-        self.cur = QPoint(ev.pos)
+        self.cur = self._point(ev)
         self.dragging = True
         self.c.invalidate()
 
     def move(self, ev):
-        if self.dragging:
-            self.cur = QPoint(ev.pos)
-            self.c.invalidate()
+        # the next side follows the mouse between clicks too, not only while a button is held
+        if self.pts:
+            pt = self._point(ev)
+            if pt != self.cur:
+                self.cur = pt
+                self.c.invalidate()
 
     def release(self, ev):
         if not self.dragging:
             return
         self.dragging = False
-        pt = QPoint(ev.pos)
         if len(self.pts) >= 3:
             first = self.pts[0]
             tol = max(2.0, 6.0 / self.c.zoom)
-            if math.hypot(pt.x() - first.x(), pt.y() - first.y()) <= tol:
+            if math.hypot(ev.pos.x() - first.x(), ev.pos.y() - first.y()) <= tol:
                 self.finish()
                 return
+        pt = self._point(ev)
         if pt != self.pts[-1]:
             self.pts.append(pt)
         self.cur = None
@@ -1438,6 +1619,15 @@ class PolygonTool(ShapeBase):
             return True
         if self.pts and e.key() in (Qt.Key_Return, Qt.Key_Enter):
             self.finish()
+            return True
+        if self.pts and e.key() == Qt.Key_Backspace:
+            # take back the last corner; the side to the mouse now starts at the one before
+            if len(self.pts) <= 1 or self.dragging:
+                self.cancel()
+            else:
+                self.pts.pop()
+                self.c.stateChanged.emit()
+                self.c.invalidate()
             return True
         return False
 

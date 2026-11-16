@@ -186,6 +186,43 @@ def run(app) -> int:
         doc.new(800, 600)
     step("object selection", object_sel)
 
+    def polygon_sel():
+        from PySide6.QtCore import Qt
+        from .tools import Ev, snap45
+        st.set_tool("select")
+        st.set_sel_mode("poly")
+        t = c.select_tool
+
+        def ev(x, y, button=Qt.LeftButton):
+            return Ev(QPoint(x, y), QPointF(x, y), c.to_view(QPointF(x, y)), button, button, Qt.NoModifier, QPoint())
+        for x, y in ((100, 100), (300, 120), (200, 300)):
+            t.press(ev(x, y))
+            t.release(ev(x, y))
+            t.move(ev(x + 20, y + 20, Qt.NoButton))
+        assert t.building and len(t.poly) == 3
+        win.grab()
+        assert c.undo() is None and len(t.poly) == 2      # takes back a corner
+        t.press(ev(200, 300))
+        t.release(ev(200, 300))
+        t.poly_close()
+        assert t.sel is not None and t.sel.rect == QRect(100, 100, 200, 200) and t.sel.outline
+        win.grab()
+        c.delete_selection()
+        assert doc.image.pixel(200, 150) == st.color2.rgb() and doc.can_undo()
+        c.undo()
+        assert snap45(QPoint(0, 0), QPoint(50, 4)) == QPoint(50, 0)
+        st.set_sel_mode("rect")
+        st.set_tool("shape", shape="polygon")
+        for x, y in ((400, 100), (500, 100), (450, 200)):
+            c.tool.press(ev(x, y))
+            c.tool.release(ev(x, y))
+            c.tool.move(ev(x + 30, y + 30, Qt.NoButton))
+        win.grab()
+        c.commit_pending()
+        st.set_tool("brush")
+        doc.new(800, 600)
+    step("polygon selection and shape", polygon_sel)
+
     def text():
         st.set_tool("text")
         c.text_tool._create(QRect(40, 300, 260, 40))

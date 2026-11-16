@@ -57,6 +57,14 @@ packaged build and refuses to archive a build that fails.
   blurring softens outlines too. On dark backgrounds, pixels darker than every background colour
   near the object join its parts (a black outline on a navy sky). Ctrl+click subtracts (wand and
   object modes); Ctrl+drag still copies.
+- Polygon selection (Select > Polygon selection): `SelectTool` mode `"poly"` collects clicked corners
+  in `self.poly` (press starts dragging a corner, release drops it; clicking the first corner,
+  double-click or Enter runs `poly_close()`, which makes an ordinary path selection plus
+  `Selection.outline` so the real outline is drawn until it is lifted). It is not a pending edit:
+  `commit()` just drops an unfinished polygon, and `Canvas.undo()` first asks `tool.step_back()`, so
+  Ctrl+Z takes back a corner instead of undoing the picture. The Polygon *shape* (`PolygonTool`)
+  shares `snap45()` (Shift) and has the same follow-the-mouse side and Backspace; its Ctrl+Z still
+  removes the whole shape, like every shape.
 - `colordialog.py` Edit Colors, `helpwindow.py` Help, `keytips.py` Alt key tips, `recovery.py`
   autosave and crash recovery, `scanner.py` From scanner or camera.
 

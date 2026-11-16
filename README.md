@@ -41,7 +41,7 @@ python run.py        # or: pip install . && opendraw7
 - **Shapes**: all 23 (line, curve, oval, rectangle, rounded rectangle, polygon, triangles, diamond,
   pentagon, hexagon, arrows, stars, callouts, heart, lightning) with the seven outline and fill
   styles. A shape stays adjustable (move, resize, recolor) until you click away.
-- **Selections**: rectangular, free-form, magic wand and object selection (click a character to
+- **Selections**: rectangular, free-form, polygon (click corner after corner), magic wand and object selection (click a character to
   select all of it without the background, with a clean soft edge; Shift+click adds), move, Ctrl-drag to copy,
   Shift-drag to leave a trail, resize by the handles,
   transparent selection, select all, invert selection, crop, delete.
@@ -99,7 +99,7 @@ against a running copy, so do not expect a pixel-for-pixel match.
   Start with `--native-frame` to use the desktop's title bar instead.
 - **Dialogs** (open, save, print) are the Qt or desktop ones; Edit Colors is rebuilt.
 - **Help** text is written for OpenDraw7; the original's help is copyrighted.
-- **Additions** the original does not have: magic wand, transparent backgrounds, fit to window,
+- **Additions** the original does not have: polygon selection, magic wand, transparent backgrounds, fit to window,
   crash recovery, layers.
 
 On Wayland desktops OpenDraw7 runs through XWayland by default, because that is where the custom

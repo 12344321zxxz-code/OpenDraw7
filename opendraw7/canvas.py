@@ -495,6 +495,8 @@ class Canvas(QAbstractScrollArea):
 
     # -- edit commands -------------------------------------------------------
     def undo(self):
+        if self.tool.step_back():
+            return
         self.commit_pending()
         self.doc.undo()
         self.stateChanged.emit()

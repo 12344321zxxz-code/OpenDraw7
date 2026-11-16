@@ -451,6 +451,7 @@ class MainWindow(QWidget):
         m.add_header("Selection shapes")
         m.add_item("Rectangular selection", "sel_rect", lambda: self._set_sel_mode("rect"))
         m.add_item("Free-form selection", "sel_free", lambda: self._set_sel_mode("free"))
+        m.add_item("Polygon selection", "sel_poly", lambda: self._set_sel_mode("poly"))
         m.add_item("Magic wand selection", "sel_wand", lambda: self._set_sel_mode("wand"))
         m.add_item("Object selection", "sel_object", lambda: self._set_sel_mode("object"))
         m.add_header("Selection options")
@@ -714,10 +715,10 @@ class MainWindow(QWidget):
         for b in (self.paste_btn, self.t_paste):
             b.setEnabled(True)
         self.crop_btn.setEnabled(sel)
-        self.q_undo.setEnabled(d.can_undo() or c.tool.has_pending())
+        self.q_undo.setEnabled(d.can_undo() or c.tool.has_pending() or c.select_tool.building)
         self.q_redo.setEnabled(d.can_redo())
         self.select_btn.setChecked(st.tool == "select")
-        self.select_btn.set_icon({"free": "select_free32", "wand": "select_wand32", "object": "select_object32"}.get(st.sel_mode, "select32"))
+        self.select_btn.set_icon({"free": "select_free32", "poly": "select_poly32", "wand": "select_wand32", "object": "select_object32"}.get(st.sel_mode, "select32"))
         for tid, b in self.tool_btns.items():
             b.setChecked(st.tool == tid)
         self.brush_btn.setChecked(st.tool == "brush")

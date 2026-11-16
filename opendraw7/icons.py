@@ -569,6 +569,39 @@ def _(p):
     p.drawPath(path)
 
 
+def _poly_sel(p, k):
+    """Polygon selection: a dashed five-cornered outline with a point at each corner; k scales the
+    16px drawing."""
+    p.save()
+    p.scale(k, k)
+    pts = poly(2, 6, 9, 2, 14, 8, 10, 14, 3, 13)
+    q = QPen(QColor("#2b4e8c"), 1.1 if k == 1 else 0.6)
+    q.setDashPattern([2, 1.6] if k == 1 else [3, 2.4])
+    p.setPen(q)
+    p.setBrush(lg(0, 2, 0, 14, (0, "#ffffff"), (1, "#dcebfa")))
+    p.drawPolygon(pts)
+    crisp(p)
+    for i in range(pts.size()):
+        c = pts.at(i)
+        if k == 1:
+            p.fillRect(QRectF(c.x() - 1, c.y() - 1, 2, 2), QColor("#2b4e8c"))
+        else:
+            p.fillRect(QRectF(c.x() - 1.25, c.y() - 1.25, 2.5, 2.5), QColor("#2b4e8c"))
+            p.fillRect(QRectF(c.x() - 0.75, c.y() - 0.75, 1.5, 1.5), QColor("#ffffff"))
+    crisp(p, False)
+    p.restore()
+
+
+@icon_fn("sel_poly")
+def _(p):
+    _poly_sel(p, 1.0)
+
+
+@icon_fn("select_poly32", 32)
+def _(p):
+    _poly_sel(p, 2.0)
+
+
 def _wand(p, k):
     """Magic wand: a dark stick with a gold star at its tip; k scales the 16px drawing."""
     p.save()

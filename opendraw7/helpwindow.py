@@ -28,7 +28,9 @@ perfect square, circle or a 45° line.</p>
 <p>Until you click somewhere else, the shape stays adjustable: drag its handles to resize it, drag it
 to move it, or change the colours, size, <b>Outline</b> and <b>Fill</b> styles.</p>
 <p>The <b>Curve</b> is drawn in steps: drag a straight line, then click or drag up to twice to bend it.
-The <b>Polygon</b> is drawn by clicking corner after corner; double-click to close it.</p>"""),
+The <b>Polygon</b> is drawn by clicking corner after corner: the next side follows the mouse until you
+click. Double-click, press <b>Enter</b> or click the first corner to close it. <b>Backspace</b> takes
+back the last corner, <b>Shift</b> keeps a side straight or at 45°, and <b>Esc</b> cancels.</p>"""),
     ("Fill with color", """
 <p>Click an area with the <b>Fill with color</b> bucket to fill it with Color 1 (right-click for
 Color 2). The fill covers the area of the colour you clicked, and also blends into the soft edges of
@@ -47,6 +49,10 @@ bottom row of the palette.</p>"""),
 <ul>
 <li><b>Rectangular selection</b>: drag a rectangle.</li>
 <li><b>Free-form selection</b>: draw around the part you want.</li>
+<li><b>Polygon selection</b>: click corner after corner around the part you want; a line follows the
+mouse to show the next side. Click the first corner, double-click or press <b>Enter</b> to close the
+outline and select what is inside. <b>Backspace</b> (or Ctrl+Z) takes back the last corner,
+<b>Shift</b> keeps a side straight or at 45°, and <b>Esc</b> or a right-click cancels.</li>
 <li><b>Magic wand selection</b>: click an area to select all the connected pixels of a similar
 colour. Hold <b>Shift</b> and click more areas to add them to the selection, or <b>Ctrl</b>+click an
 area to take it out.</li>
