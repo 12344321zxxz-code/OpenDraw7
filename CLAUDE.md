@@ -65,6 +65,10 @@ packaged build and refuses to archive a build that fails.
   Ctrl+Z takes back a corner instead of undoing the picture. The Polygon *shape* (`PolygonTool`)
   shares `snap45()` (Shift) and has the same follow-the-mouse side and Backspace; its Ctrl+Z still
   removes the whole shape, like every shape.
+- Clipboard: `SelectTool.copy()` always builds the piece with alpha (`content(None)`), so the area
+  outside a shaped selection is see-through on paste, even from the opaque bottom layer; a piece
+  with no see-through pixel goes out as plain `RGB32`. (The original fills the rectangle with white;
+  Ariel asked for this instead.)
 - `colordialog.py` Edit Colors, `helpwindow.py` Help, `keytips.py` Alt key tips, `recovery.py`
   autosave and crash recovery, `scanner.py` From scanner or camera.
 

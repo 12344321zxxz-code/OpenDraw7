@@ -99,6 +99,8 @@ against a running copy, so do not expect a pixel-for-pixel match.
   Start with `--native-frame` to use the desktop's title bar instead.
 - **Dialogs** (open, save, print) are the Qt or desktop ones; Edit Colors is rebuilt.
 - **Help** text is written for OpenDraw7; the original's help is copyrighted.
+- **Copying a shaped selection** (polygon, free-form, wand, object) keeps the area around the shape
+  see-through; the original fills the bounding rectangle with white.
 - **Additions** the original does not have: polygon selection, magic wand, transparent backgrounds, fit to window,
   crash recovery, layers.
 

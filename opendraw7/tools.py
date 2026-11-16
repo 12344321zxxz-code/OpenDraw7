@@ -641,8 +641,14 @@ class SelectTool(Tool):
         return out
 
     def copy(self):
+        """Put the selection on the clipboard. Whatever lies outside a shaped selection (polygon,
+        free-form, wand, object) stays see-through, so pasting gives the shape and not its bounding
+        rectangle; a selection with nothing see-through in it goes out as a plain picture."""
         if self.sel is not None:
-            QGuiApplication.clipboard().setImage(self.content(None if self.c.doc.transparent else QColor(255, 255, 255)))
+            img = self.content(None)
+            if ((const_pixels(img) >> 24) == 255).all():
+                img = img.convertToFormat(QImage.Format_RGB32)
+            QGuiApplication.clipboard().setImage(img)
 
     def cut(self):
         if self.sel is not None:

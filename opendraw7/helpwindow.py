@@ -66,6 +66,9 @@ plain or smooth background.</li>
 <p>Drag a selection to move it. Hold <b>Ctrl</b> while dragging to move a copy and leave the original
 where it was. Hold <b>Shift</b> while dragging to leave a trail of copies behind. The arrow keys move a
 selection one pixel at a time.</p>
+<p>When you copy or cut a selection that is not a rectangle (polygon, free-form, magic wand or
+object), only its shape goes to the clipboard: the rest of the rectangle around it stays see-through,
+so pasting it, here or on another layer, gives just the shape.</p>
 <p><b>Transparent selection</b> (in the Select menu) leaves out the parts of the selection that are
 Color 2 when you move or paste it. <b>Invert selection</b> selects everything that was not selected.
 <b>Crop</b> (Ctrl+Shift+X) keeps only the selection.</p>"""),

@@ -880,6 +880,92 @@ ok(px(110, 110) == RED.name() and px(190, 190) == WHITE and px(5, 5) == WHITE, "
 c.undo()
 st.set_sel_mode("rect")
 
+# ---- copying a shaped selection keeps its surround see-through (0.3.4) ---------------------
+def alpha(img, x, y):
+    return (img.pixel(x, y) >> 24) & 0xFF
+
+
+def clip_image():
+    return QGuiApplication.clipboard().image().convertToFormat(QImage.Format_ARGB32)
+
+
+BLUE = QColor(20, 40, 220)
+doc.new(400, 300)
+doc.image.fill(RED)
+doc.changed.emit()
+st.set_sel_mode("poly")
+st.set_tool("select")
+for pt in ((50, 50), (150, 50), (50, 150)):
+    click(*pt)
+QTest.keyClick(c, Qt.Key_Return)
+c.copy()
+clip = clip_image()
+ok(clip.size() == QSize(100, 100) and alpha(clip, 10, 10) == 255 and QColor(clip.pixel(10, 10)).name() == RED.name()
+   and alpha(clip, 90, 90) == 0, "copying a polygon leaves the rest of its rectangle see-through")
+QTest.keyClick(c, Qt.Key_Escape)
+doc.image.fill(BLUE)
+doc.changed.emit()
+c.paste()
+QTest.keyClick(c, Qt.Key_Escape)
+ok(px(10, 10) == RED.name() and px(90, 90) == BLUE.name(), "pasting a copied polygon pastes only the polygon")
+# cut from the background, paste on a new layer (what the user did)
+doc.image.fill(RED)
+doc.changed.emit()
+for pt in ((50, 50), (150, 50), (50, 150)):
+    click(*pt)
+QTest.keyClick(c, Qt.Key_Return)
+c.cut()
+ok(px(60, 60) == WHITE and px(140, 140) == RED.name(), "cutting a polygon leaves a polygon-shaped hole")
+doc.add_layer()
+c.paste()
+QTest.keyClick(c, Qt.Key_Escape)
+ok(alpha(doc.image, 10, 10) == 255 and alpha(doc.image, 90, 90) == 0 and alpha(doc.image, 200, 200) == 0,
+   "a cut polygon pasted on a new layer has no rectangle around it")
+ok(alpha(doc.image, 90, 30) == 0 and QColor(c.display_image().pixel(90, 30)).name() == RED.name(),
+   "the background shows around the pasted polygon")
+c.undo()
+c.undo()
+c.undo()
+ok(len(doc.layers) == 1 and px(60, 60) == RED.name(), "undo the paste, the layer and the cut")
+# a moved (lifted) polygon keeps its shape on the clipboard too
+for pt in ((50, 50), (150, 50), (50, 150)):
+    click(*pt)
+QTest.keyClick(c, Qt.Key_Return)
+drag([(70, 70), (100, 100), (170, 170)])
+c.copy()
+clip = clip_image()
+ok(alpha(clip, 10, 10) == 255 and alpha(clip, 90, 90) == 0, "a moved polygon is copied without its rectangle")
+c.undo()
+# free-form and magic wand
+st.set_sel_mode("free")
+drag([(50, 50), (150, 50), (50, 150), (50, 60)])
+c.copy()
+clip = clip_image()
+ok(alpha(clip, 10, 10) == 255 and alpha(clip, clip.width() - 5, clip.height() - 5) == 0,
+   "copying a free-form selection leaves the rest see-through")
+QTest.keyClick(c, Qt.Key_Escape)
+doc.new(400, 300)
+p = QPainter(doc.image)
+p.setBrush(RED)
+p.setPen(Qt.NoPen)
+p.drawEllipse(100, 100, 100, 100)
+p.end()
+doc.changed.emit()
+st.set_sel_mode("wand")
+click(150, 150)
+c.copy()
+clip = clip_image()
+ok(alpha(clip, clip.width() // 2, clip.height() // 2) == 255 and alpha(clip, 1, 1) == 0,
+   "copying a magic wand selection leaves the rest see-through")
+QTest.keyClick(c, Qt.Key_Escape)
+# a plain rectangle is still a plain picture
+st.set_sel_mode("rect")
+drag([(90, 90), (150, 150), (210, 210)])
+c.copy()
+raw = QGuiApplication.clipboard().image()
+ok(not raw.hasAlphaChannel() and raw.size() == QSize(120, 120), "a rectangular copy is a plain picture")
+QTest.keyClick(c, Qt.Key_Escape)
+
 # ---- polygon shape: preview line, backspace, shift (0.3.3) --------------------------------
 doc.new(400, 300)
 st.set_tool("shape", shape="polygon")
