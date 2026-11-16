@@ -557,6 +557,61 @@ def soft_alpha(a, mask, bg):
     return alpha
 
 
+def clean_rim(a, mask, bg):
+    """Wipe the faint tint a lifted object leaves on the background right around it.
+
+    The outermost pixels of a smoothed edge are so close to the background's colour that they count
+    as background and stay behind when the object is moved or deleted: a pale ghost of its outline.
+    Each background pixel within RIM of the object that is nearly, but not exactly, a colour of the
+    clean background just beyond it becomes the closest of those colours (closest, not their
+    average, so stripes and checks stay sharp). a is a writable uint32 window of the picture, mask the object in
+    it, bg the background found for that window. Photos are left alone: their edges are blurred
+    wider than this anyway, and no pixel of theirs matches a neighbour exactly."""
+    grown = _dilate(mask, RIM)
+    ring = grown & ~mask & bg
+    clean = bg & ~grown
+    ys, xs = np.nonzero(ring)
+    if not len(ys) or not clean.any():
+        return
+    b = _bytes(a)
+    pair = clean[:, 1:] & clean[:, :-1]
+    if pair.any() and float(np.median(_absdiff_max(b[:, 1:][pair], b[:, :-1][pair]))) >= 2:
+        return
+    h, w = a.shape
+    r = RIM + 2
+    mine = b[ys, xs].astype(np.int16)
+    best = np.full(len(ys), 1 << 30, dtype=np.int32)
+    pick = a[ys, xs].copy()
+    for dy in range(-r, r + 1):
+        for dx in range(-r, r + 1):
+            yy, xx = ys + dy, xs + dx
+            use = (yy >= 0) & (yy < h) & (xx >= 0) & (xx < w)
+            use[use] = clean[yy[use], xx[use]]
+            if not use.any():
+                continue
+            d = ((b[yy[use], xx[use]].astype(np.int16) - mine[use]).astype(np.int32) ** 2).sum(axis=1)
+            idx = np.flatnonzero(use)
+            better = d < best[idx]
+            best[idx[better]] = d[better]
+            pick[idx[better]] = a[yy[use][better], xx[use][better]]
+    # also the commonest clean colours around the whole object: where its edge runs along a stripe
+    # only a pixel wide, no clean pixel of that stripe is within reach
+    sample = a[clean]
+    sample = sample[:: max(1, len(sample) // 200_000)]
+    colours, counts = np.unique(sample, return_counts=True)
+    common = counts >= max(2, len(sample) // 50)          # real background colours, not stray tints
+    for col in colours[common][np.argsort(counts[common])[::-1][:8]]:
+        cb = np.array([col & 0xFF, (col >> 8) & 0xFF, (col >> 16) & 0xFF, (col >> 24) & 0xFF], dtype=np.int32)
+        d = ((mine.astype(np.int32) - cb) ** 2).sum(axis=1)
+        better = d < best
+        best[better] = d[better]
+        pick[better] = col
+    # tinted, but still within what counted as background of a clean colour nearby: anything further
+    # off is a real feature of the background (the soft edge of a stripe, a horizon) and stays
+    change = (best > 0) & (best <= int(BG_NEAR ** 2))
+    a[ys[change], xs[change]] = pick[change]
+
+
 def cutout(a, mask, alpha, bg_color=None):
     """Premultiplied ARGB uint32 array of the selected pixels with soft edges; rim colours have the
     background's tint removed. a, mask, alpha cover the same area."""

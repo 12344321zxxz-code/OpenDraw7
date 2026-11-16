@@ -145,15 +145,15 @@ class Canvas(QAbstractScrollArea):
                   e.globalPosition().toPoint())
 
     def color_at(self, pos: QPoint):
+        """The colour shown at pos (alpha 0 where the picture is see-through), or None outside it."""
         img = self.display_image()
         if img.rect().contains(pos):
-            return QColor(img.pixel(pos))
+            return img.pixelColor(pos)
         return None
 
     # -- display -------------------------------------------------------------
-    def display_image(self) -> QImage:
-        """What the picture looks like now: the active layer with the tool's work in progress,
-        blended with the other visible layers."""
+    def _active_display(self) -> QImage:
+        """The active layer as it looks now, with the tool's work in progress."""
         if self._display is None:
             try:
                 comp = self.tool.composite()
@@ -162,47 +162,78 @@ class Canvas(QAbstractScrollArea):
                 comp = None
                 self._drop_pending()
             self._display = comp if comp is not None else self.doc.image
-        if self.doc.single():
-            return self._display
-        return self._layered(self._display)
+        return self._display
 
-    def _layered(self, active: QImage) -> QImage:
-        # The layers below and above the active one are blended once and kept until one of them
-        # changes; each repaint while drawing then costs three image draws, not one per layer.
+    def display_image(self) -> QImage:
+        """What the picture looks like now: the active layer with the tool's work in progress,
+        blended with the other visible layers."""
+        active = self._active_display()
+        if self.doc.single():
+            return active
+        return self._layered(active)
+
+    def _groups(self):
+        """Blend the layers below and the layers above the active one, each group once, and keep
+        them until one of their layers changes. A group with nothing to show is None."""
         d = self.doc
-        below = tuple((ly.image.cacheKey(), ly.visible, ly.opacity) for ly in d.layers[:d.active])
-        above = tuple((ly.image.cacheKey(), ly.visible, ly.opacity) for ly in d.layers[d.active + 1:])
-        cur = d.layer
-        key = (active.cacheKey(), cur.visible, cur.opacity, below, above, d.width(), d.height())
-        if key == self._lkey and self._limg is not None:
-            return self._limg
         size = (d.width(), d.height())
-        if (below, size) != self._below_key:
-            self._below = d.composite(upto=d.active)
-            self._below_key = (below, size)
-        if (above, size) != self._above_key:
-            img = QImage(d.width(), d.height(), QImage.Format_ARGB32_Premultiplied)
-            img.fill(0)
-            p = QPainter(img)
-            for ly in d.layers[d.active + 1:]:
-                if ly.visible and ly.opacity > 0:
+        for name, layers in (("_below", d.layers[:d.active]), ("_above", d.layers[d.active + 1:])):
+            key = (tuple((ly.image.cacheKey(), ly.visible, ly.opacity) for ly in layers), size)
+            if key == getattr(self, name + "_key"):
+                continue
+            shown = [ly for ly in layers if ly.visible and ly.opacity > 0]
+            img = None
+            if len(shown) == 1 and shown[0].opacity >= 1.0:
+                img = shown[0].image                   # a single plain layer needs no blending
+            elif shown:
+                img = QImage(d.width(), d.height(), QImage.Format_ARGB32_Premultiplied)
+                img.fill(0)
+                p = QPainter(img)
+                for ly in shown:
                     p.setOpacity(ly.opacity)
                     p.drawImage(0, 0, ly.image)
-            p.end()
-            self._above = img
-            self._above_key = (above, size)
-        out = QImage(self._below)
-        out = out.convertToFormat(QImage.Format_ARGB32_Premultiplied) if out.format() != \
-            QImage.Format_ARGB32_Premultiplied else out.copy()
-        p = QPainter(out)
+                p.end()
+            setattr(self, name, img)
+            setattr(self, name + "_key", key)
+
+    def _planes(self, active: QImage):
+        """[(image, opacity)] to draw bottom first: one image for a plain picture, else the layers
+        below, the active layer and the layers above. Painting draws these straight to the screen,
+        so a stroke on a large layered picture costs what is visible, not the whole picture."""
+        d = self.doc
+        if d.single():
+            return [(active, 1.0)]
+        self._groups()
+        cur = d.layer
+        planes = []
+        if self._below is not None:
+            planes.append((self._below, 1.0))
         if cur.visible and cur.opacity > 0:
-            p.setOpacity(cur.opacity)
-            p.drawImage(0, 0, active)
-        p.setOpacity(1.0)
-        p.drawImage(0, 0, self._above)
+            planes.append((active, cur.opacity))
+        if self._above is not None:
+            planes.append((self._above, 1.0))
+        return planes
+
+    def _layered(self, active: QImage) -> QImage:
+        """The whole layered picture as one image (colour picker, thumbnail, tests)."""
+        d = self.doc
+        planes = self._planes(active)
+        key = (tuple((img.cacheKey(), op) for img, op in planes), d.width(), d.height())
+        if key == self._lkey and self._limg is not None:
+            return self._limg
+        out = QImage(d.width(), d.height(), QImage.Format_ARGB32_Premultiplied)
+        out.fill(0)
+        p = QPainter(out)
+        for img, op in planes:
+            p.setOpacity(op)
+            p.drawImage(0, 0, img)
         p.end()
         self._lkey, self._limg = key, out
         return out
+
+    def _see_through(self, planes) -> bool:
+        """Whether the checkerboard can show anywhere (False if an opaque layer covers everything)."""
+        return not any(op >= 1.0 and not img.hasAlphaChannel() for img, op in planes)
 
     def _drop_pending(self):
         """Throw away whatever the tool has in progress after it failed."""
@@ -290,21 +321,21 @@ class Canvas(QAbstractScrollArea):
 
     # -- painting ------------------------------------------------------------
     def paintEvent(self, e):
-        img = self.display_image()
+        planes = self._planes(self._active_display())
         p = QPainter(self.viewport())
         try:
-            self._paint(p, e, img)
+            self._paint(p, e, planes)
         except Exception:
             traceback.print_exc()
             self._drop_pending()
         finally:
             p.end()
 
-    def _paint(self, p, e, img):
+    def _paint(self, p, e, planes):
         p.fillRect(e.rect(), T.WORKSPACE)
         o = self.origin()
         z = self.zoom
-        w, h = img.width(), img.height()
+        w, h = self.doc.width(), self.doc.height()
         full = QRect(o.x(), o.y(), int(round(w * z)), int(round(h * z)))
         vis = e.rect().intersected(full)
         if not vis.isEmpty():
@@ -312,11 +343,15 @@ class Canvas(QAbstractScrollArea):
             sy0 = max(0, int(math.floor((vis.top() - o.y()) / z)))
             sx1 = min(w, int(math.ceil((vis.right() + 1 - o.x()) / z)))
             sy1 = min(h, int(math.ceil((vis.bottom() + 1 - o.y()) / z)))
-            if img.hasAlphaChannel():
+            if self._see_through(planes):
                 p.fillRect(vis, checker_brush())
+            target = QRectF(o.x() + sx0 * z, o.y() + sy0 * z, (sx1 - sx0) * z, (sy1 - sy0) * z)
+            source = QRectF(sx0, sy0, sx1 - sx0, sy1 - sy0)
             p.setRenderHint(QPainter.SmoothPixmapTransform, z < 1)
-            p.drawImage(QRectF(o.x() + sx0 * z, o.y() + sy0 * z, (sx1 - sx0) * z, (sy1 - sy0) * z),
-                        img, QRectF(sx0, sy0, sx1 - sx0, sy1 - sy0))
+            for img, opacity in planes:
+                p.setOpacity(opacity)
+                p.drawImage(target, img, source)
+            p.setOpacity(1.0)
             p.setRenderHint(QPainter.SmoothPixmapTransform, False)
         # soft shadow along the right and bottom edges
         for i, a in enumerate((70, 30, 12)):
@@ -412,6 +447,9 @@ class Canvas(QAbstractScrollArea):
                 self.sizeInfo.emit(None)
                 self.viewport().update()
             return
+        menu_click = self.state.tool == "select" and e.button() == Qt.RightButton
+        if not menu_click and self._hidden_layer():
+            return
         self.tool.press(ev)
         self._apply_cursor(ev)
 
@@ -446,8 +484,26 @@ class Canvas(QAbstractScrollArea):
 
     def mouseDoubleClickEvent(self, e):
         ev = self._ev(e)
+        if self._hidden_layer(tell=False):
+            return
         self.tool.press(ev)
         self.tool.double_click(ev)
+
+    def _hidden_layer(self, tell=True) -> bool:
+        """True (after saying why) if a click must not start new work because the layer it would
+        land on cannot be seen: drawing there would look as if nothing happened."""
+        ly = self.doc.layer
+        if ly.visible and ly.opacity > 0:
+            return False
+        if self.state.tool in ("magnifier", "picker") or self.tool.has_pending() or self.tool.busy:
+            return False
+        if tell:
+            from PySide6.QtWidgets import QMessageBox
+            why = ("it is hidden. Click its eye in the Layers pane to show it" if not ly.visible
+                   else "its opacity is 0%. Raise the opacity in the Layers pane")
+            QMessageBox.information(self.window(), "Paint",
+                                    f"You cannot draw on the layer \"{ly.name}\" because {why}.")
+        return True
 
     def leaveEvent(self, e):
         self.hover = None

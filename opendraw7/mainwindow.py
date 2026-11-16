@@ -106,6 +106,7 @@ class MainWindow(QWidget):
         self.doc = Document(DEFAULT_W, DEFAULT_H, self)
         self.thumb = None
         self._printer = None
+        self._merged_ok = None          # file the user agreed to save with its layers merged
         self._color_sets = []
         self._color_btns = []
         self.autosaver = None
@@ -709,7 +710,6 @@ class MainWindow(QWidget):
         text = c.text_editing()
         has_text_sel = text and c.text_tool.cur.hasSelection()
         can_copy = sel or has_text_sel
-        can_paste = c.can_paste()
         for b in (self.cut_btn, self.copy_btn, self.t_cut, self.t_copy):
             b.setEnabled(bool(can_copy) or text)
         for b in (self.paste_btn, self.t_paste):
@@ -963,7 +963,8 @@ class MainWindow(QWidget):
 
     def save_as(self, fmt=None):
         self.canvas.commit_pending()
-        fmt = fmt or (self.doc.fmt if self.doc.path else "png")
+        # a new picture with layers is offered the one file type that keeps them
+        fmt = fmt or (self.doc.fmt if self.doc.path else ("ora" if len(self.doc.layers) > 1 else "png"))
         filters = [label for _k, label, _e in FORMATS]
         start = self.doc.path or os.path.join(self._start_dir(), "Untitled")
         base = os.path.splitext(start)[0] + "." + FORMAT_BY_KEY[fmt][1][0]
@@ -984,6 +985,16 @@ class MainWindow(QWidget):
         return self._write(path, chosen)
 
     def _write(self, path, fmt):
+        if fmt != "ora" and len(self.doc.layers) > 1 and self._merged_ok != os.path.abspath(path):
+            # Saving would quietly merge the layers and still count the picture as saved, so they
+            # would be gone after closing. Say so once for each file.
+            r = QMessageBox.warning(self, "Paint", "This file type cannot keep layers. The picture will be saved "
+                                    "as you see it, with its layers merged into one.\n\nTo keep the layers, "
+                                    "use Save as and choose OpenRaster (*.ora).\n\nDo you want to continue?",
+                                    QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+            if r != QMessageBox.Yes:
+                return False
+            self._merged_ok = os.path.abspath(path)
         if fmt in LOSSY:
             r = QMessageBox.warning(self, "Paint", "The color quality might be reduced if you save the picture "
                                     "in this format.\n\nDo you want to continue?",
@@ -1000,7 +1011,7 @@ class MainWindow(QWidget):
         return True
 
     def from_scanner(self):
-        from .scanner import acquire
+        from .scanner import acquire, discard
         from .document import load_image
         if not self.maybe_save():
             return
@@ -1012,6 +1023,8 @@ class MainWindow(QWidget):
         except Exception as ex:
             QMessageBox.warning(self, "Paint", f"Paint cannot read the picture from the device.\n\n{ex}")
             return
+        finally:
+            discard(path)
         self.doc.restore(img, None, "png")
         self.canvas.set_zoom(1.0)
 
@@ -1082,32 +1095,49 @@ class MainWindow(QWidget):
     def set_wallpaper(self, mode):
         path = self._export_copy("wallpaper.png")
         uri = QUrl.fromLocalFile(path).toString()
-        attempts = []
-        if sys.platform == "darwin":
-            attempts.append(["osascript", "-e",
-                             f'tell application "System Events" to set picture of every desktop to "{path}"'])
-        else:
-            opt = {"fill": "zoom", "tile": "wallpaper", "center": "centered"}[mode]
-            attempts.append(["sh", "-c",
-                             f"gsettings set org.gnome.desktop.background picture-uri '{uri}' && "
-                             f"gsettings set org.gnome.desktop.background picture-uri-dark '{uri}' && "
-                             f"gsettings set org.gnome.desktop.background picture-options '{opt}'"])
-            attempts.append(["plasma-apply-wallpaperimage", path])
-            attempts.append(["sh", "-c", "xfconf-query -c xfce4-desktop -l | grep last-image | "
-                                         f"xargs -I{{}} xfconf-query -c xfce4-desktop -p {{}} -s '{path}'"])
-            feh = {"fill": "--bg-fill", "tile": "--bg-tile", "center": "--bg-center"}[mode]
-            attempts.append(["feh", feh, path])
-        desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
-        if "kde" in desktop:
-            attempts.insert(0, attempts.pop(1))
-        elif "xfce" in desktop:
-            attempts.insert(0, attempts.pop(2))
-        for cmd in attempts:
+
+        # Every command gets the path as an argument of its own, never pasted into a shell line,
+        # so a folder name with a quote or a space in it cannot break (or change) the command.
+        def run(*cmd):
             try:
-                if subprocess.run(cmd, capture_output=True, timeout=10).returncode == 0:
-                    return
+                r = subprocess.run(cmd, capture_output=True, timeout=10, text=True)
             except (OSError, subprocess.SubprocessError):
-                continue
+                return None
+            return r.stdout if r.returncode == 0 else None
+
+        def gnome():
+            gs = ("gsettings", "set", "org.gnome.desktop.background")
+            if run(*gs, "picture-uri", uri) is None:
+                return False
+            run(*gs, "picture-uri-dark", uri)            # newer desktops only; fine if it is missing
+            opt = {"fill": "zoom", "tile": "wallpaper", "center": "centered"}[mode]
+            return run(*gs, "picture-options", opt) is not None
+
+        def kde():
+            return run("plasma-apply-wallpaperimage", path) is not None
+
+        def xfce():
+            props = run("xfconf-query", "-c", "xfce4-desktop", "-l")
+            names = [ln.strip() for ln in (props or "").splitlines() if "last-image" in ln]
+            done = [run("xfconf-query", "-c", "xfce4-desktop", "-p", name, "-s", path) is not None for name in names]
+            return bool(done) and all(done)
+
+        def feh():
+            return run("feh", {"fill": "--bg-fill", "tile": "--bg-tile", "center": "--bg-center"}[mode], path) is not None
+
+        def mac():
+            script = "on run argv\ntell application \"System Events\" to set picture of every desktop to (item 1 of argv)\nend run"
+            return run("osascript", "-e", script, path) is not None
+
+        attempts = [mac] if sys.platform == "darwin" else [gnome, kde, xfce, feh]
+        desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+        if "kde" in desktop and kde in attempts:
+            attempts.insert(0, attempts.pop(attempts.index(kde)))
+        elif "xfce" in desktop and xfce in attempts:
+            attempts.insert(0, attempts.pop(attempts.index(xfce)))
+        for attempt in attempts:
+            if attempt():
+                return
         QMessageBox.information(self, "Paint", "The desktop background could not be set automatically on this "
                                 f"desktop. The picture was saved here so you can set it yourself:\n\n{path}")
 

@@ -156,7 +156,7 @@ class PropertiesDialog(QDialog):
         self.c_clear = QCheckBox("Transparent background")
         self.c_clear.setToolTip("The eraser, Delete and Cut leave see-through areas.\n"
                                 "PNG, GIF and TIFF files keep them.")
-        self.c_clear.setChecked(doc.transparent)
+        self.c_clear.setChecked(doc.background_transparent)     # the bottom layer, not the selected one
         cl.addWidget(self.c_clear)
         cl.addStretch(1)
         row.addWidget(cb)

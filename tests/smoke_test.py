@@ -627,7 +627,16 @@ ok(const_pixels(c.display_image().convertToFormat(QImage.Format_ARGB32_Premultip
    const_pixels(seen.convertToFormat(QImage.Format_ARGB32_Premultiplied)).tolist(), "the reopened picture looks the same")
 ok(not pane.isHidden(), "opening a layered file shows the Layers pane")
 pngp = os.path.join(tmpd, "flat.png")
-win._write(pngp, "png")
+from PySide6.QtWidgets import QMessageBox as _MB  # noqa: E402
+_asked = []
+_orig_warn = _MB.warning
+_MB.warning = staticmethod(lambda *a, **k: _asked.append(a[2]) or _MB.No)
+ok(not win._write(pngp, "png") and len(_asked) == 1 and "layers" in _asked[0] and not os.path.exists(pngp)
+   and doc.path == orap, "saving layers to a file type that cannot keep them asks first; No saves nothing")
+_MB.warning = staticmethod(lambda *a, **k: _asked.append(a[2]) or _MB.Yes)
+ok(win._write(pngp, "png") and len(_asked) == 2, "Yes saves the merged picture")
+ok(win._write(pngp, "png") and len(_asked) == 2, "the same file is not asked about twice")
+_MB.warning = _orig_warn
 flat = load_image(pngp)
 ok(len(doc.layers) == 3 and QColor(flat.pixel(200, 50)).name() == cpx(200, 50).name(), "PNG saves the picture as seen")
 pane.merge()
@@ -1063,6 +1072,297 @@ if win.isActiveWindow():
             app.sendEvent(c, QKeyEvent(typ, key, mod))
         ok(win.keytips.level == 0, "alt+shift (keyboard layout switch) does not show key tips")
         win.keytips.hide()
+
+# ---- 0.3.5: review fixes ------------------------------------------------------------------
+import stat  # noqa: E402
+import opendraw7.document as _docmod  # noqa: E402
+from opendraw7.document import load_ora, replace_file  # noqa: E402
+from opendraw7.tools import snap45  # noqa: E402
+_told = []
+_orig_info, _orig_warn2 = _MB.information, _MB.warning
+_MB.information = staticmethod(lambda *a, **k: _told.append(a[2]) or _MB.Ok)
+_MB.warning = staticmethod(lambda *a, **k: _told.append(a[2]) or _MB.Yes)
+# the colour picker leaves the colour alone on a see-through pixel (it used to pick black)
+doc.new(100, 100)
+doc.set_transparent(True)
+doc.image.fill(0)
+p = QPainter(doc.image)
+p.fillRect(60, 60, 20, 20, QColor(0, 200, 0, 128))
+p.end()
+doc.changed.emit()
+st.set_color(1, QColor(255, 0, 0))
+st.set_tool("pencil")
+st.set_tool("picker")
+QTest.mouseClick(vpw, Qt.LeftButton, Qt.NoModifier, vp(20, 20))
+ok(st.color1.name() == "#ff0000", "the colour picker ignores see-through pixels")
+st.set_tool("picker")
+QTest.mouseClick(vpw, Qt.LeftButton, Qt.NoModifier, vp(70, 70))
+ok(st.color1.green() >= 198 and st.color1.red() <= 2 and st.color1.alpha() == 255,
+   "the colour picker takes a half see-through pixel's own colour")
+# undo keeps its steps on a layered picture: layers a step did not change are not counted again
+doc.new(400, 300)
+for _ in range(3):
+    doc.add_layer()
+doc.undo_stack.clear()
+_old_bytes = _docmod.UNDO_BYTES
+_docmod.UNDO_BYTES = 4 * 1024 * 1024               # one layer is 0.46 MB, the four together 1.8 MB
+st.set_tool("pencil")
+st.set_color(1, QColor(0, 0, 0))
+for k in range(8):
+    drag([(10 + 10 * k, 10), (10 + 10 * k, 200)])
+ok(len(doc.undo_stack) == 8, "undo keeps every step it has room for on a picture with layers")
+for k in range(30):
+    drag([(100 + 5 * k, 20), (100 + 5 * k, 220)])
+ok(3 <= len(doc.undo_stack) < 38 and doc._undo_bytes() <= _docmod.UNDO_BYTES + doc.image.sizeInBytes(), "undo still lets go of the oldest steps")
+_docmod.UNDO_BYTES = _old_bytes
+# text is the same size whatever DPI the opened file claims, on every layer, before and after saving
+tmp5 = tempfile.mkdtemp()
+hi = QImage(400, 200, QImage.Format_RGB32)
+hi.fill(QColor(255, 255, 255))
+hi.setDotsPerMeterX(11811)
+hi.setDotsPerMeterY(11811)
+hi.save(os.path.join(tmp5, "dpi300.png"))
+
+
+def text_height():
+    st.set_tool("text")
+    c.text_tool._create(QRect(10, 10, 300, 60))
+    c.text_tool.insert_text("Hg")
+    before = const_pixels(doc.image).copy()
+    c.commit_pending()
+    ys = np.flatnonzero((const_pixels(doc.image) != before).any(axis=1))
+    c.undo()
+    return int(ys[-1] - ys[0] + 1) if len(ys) else 0
+
+
+doc.new(400, 200)
+plain = text_height()
+ok(win.open_path(os.path.join(tmp5, "dpi300.png")) and doc.image.dotsPerMeterX() == 11811, "a 300 DPI file opens")
+on_photo = text_height()
+doc.add_layer()
+on_layer = text_height()
+c.undo()
+ok(plain > 5 and plain == on_photo == on_layer, "text is the same size on a 300 DPI photo and on its layers")
+doc.save(os.path.join(tmp5, "again.png"), "png")
+ok(doc.image.dotsPerMeterX() == 11811 and text_height() == plain, "saving does not change the picture's DPI or the text size")
+# a save that fails leaves the old file alone; links and permissions survive a good one
+keep = os.path.join(tmp5, "keep.png")
+with open(keep, "wb") as f:
+    f.write(b"old contents")
+try:
+    save_image(QImage(), keep, "png")
+    failed = False
+except OSError:
+    failed = True
+ok(failed and open(keep, "rb").read() == b"old contents" and sorted(os.listdir(tmp5)) == ["again.png", "dpi300.png", "keep.png"],
+   "a failed save leaves the old file and no leftovers")
+
+
+def _half(tmp):
+    with open(tmp, "wb") as f:
+        f.write(b"half")
+    raise OSError("disk full")
+
+
+try:
+    replace_file(keep, _half)
+except OSError:
+    pass
+ok(open(keep, "rb").read() == b"old contents" and len(os.listdir(tmp5)) == 3, "a save cut short leaves the old file")
+os.chmod(keep, 0o600)
+link = os.path.join(tmp5, "link.png")
+os.symlink(keep, link)
+save_image(doc.image, link, "png")
+ok(os.path.islink(link) and load_image(keep).size() == doc.size() and stat.S_IMODE(os.stat(keep).st_mode) == 0o600,
+   "saving through a link keeps the link and the file's permissions")
+for fmt_key in ("bmp24", "gif", "jpeg", "tiff", "ora"):
+    out_path = os.path.join(tmp5, "f." + fmt_key)
+    save_image(doc.image, out_path, fmt_key)
+    ok(os.path.getsize(out_path) > 0, f"save {fmt_key} through a temporary file")
+ok(not [n for n in os.listdir(tmp5) if n.endswith(".tmp")], "no temporary files are left behind")
+# broken OpenRaster files are refused cleanly and leave the open picture as it was
+import zipfile  # noqa: E402
+bad = {}
+for name, files in (("nostack", {"mimetype": "image/openraster"}),
+                    ("nosize", {"stack.xml": "<image><stack/></image>"}),
+                    ("badxml", {"stack.xml": "<image w='5' h='5'><stack>"}),
+                    ("empty", {"stack.xml": "<image w='5' h='5'><stack/></image>"}),
+                    ("huge", {"stack.xml": "<image w='900000' h='900000'><stack><layer src='a.png'/></stack></image>",
+                              "a.png": open(os.path.join(tmp5, "again.png"), "rb").read()}),
+                    ("zero", {"stack.xml": "<image w='0' h='0'><stack><layer src='a.png'/></stack></image>"})):
+    bad[name] = os.path.join(tmp5, name + ".ora")
+    with zipfile.ZipFile(bad[name], "w") as z:
+        for k, v in files.items():
+            z.writestr(k, v)
+bad["text"] = os.path.join(tmp5, "text.ora")
+with open(bad["text"], "w") as f:
+    f.write("not a zip file")
+doc.new(123, 77)
+for name, path5 in bad.items():
+    try:
+        load_ora(path5)
+        raised = False
+    except OSError:
+        raised = True
+    except Exception:
+        raised = False
+    ok(raised, f"a broken OpenRaster file ({name}) is reported as unreadable")
+    _told.clear()
+    ok(not win.open_path(path5) and _told and doc.size() == QSize(123, 77) and doc.image.format() == QImage.Format_RGB32,
+       f"opening a broken OpenRaster file ({name}) leaves the picture alone")
+# Shift on the Line shape: the end stays beside the mouse on diagonals
+ok(snap45(QPoint(100, 100), QPoint(200, 190)) == QPoint(195, 195) and snap45(QPoint(0, 0), QPoint(-40, 3)) == QPoint(-40, 0)
+   and snap45(QPoint(0, 0), QPoint(2, -50)) == QPoint(0, -50) and snap45(QPoint(0, 0), QPoint(-30, 34)) == QPoint(-32, 32),
+   "snapping to 45-degree lines")
+doc.new(400, 300)
+st.set_tool("shape", shape="line")
+drag([(100, 100), (150, 140), (200, 190)], mods=Qt.ShiftModifier)
+ok(c.tool.p1 == QPoint(195, 195), "a Shift line ends beside the mouse, not short of it")
+c.tool.cancel()
+# a hidden layer cannot be drawn on by mistake
+doc.new(200, 150)
+doc.add_layer()
+doc.set_layer_props(1, visible=False)
+doc.undo_stack.clear()
+st.set_tool("pencil")
+_told.clear()
+before5 = const_pixels(doc.image).copy()
+drag([(20, 20), (100, 100)])
+ok(len(_told) == 1 and "hidden" in _told[0] and np.array_equal(before5, const_pixels(doc.image)) and not doc.undo_stack,
+   "drawing on a hidden layer is refused with a message")
+doc.set_layer_props(1, visible=True, opacity=0.0)
+_told.clear()
+drag([(20, 20), (100, 100)])
+ok(len(_told) == 1 and "opacity" in _told[0] and np.array_equal(before5, const_pixels(doc.image)),
+   "drawing on a layer with no opacity is refused with a message")
+doc.set_layer_props(1, opacity=1.0)
+_told.clear()
+drag([(20, 20), (100, 100)])
+ok(not _told and (doc.image.pixel(60, 60) >> 24) == 255, "a shown layer can be drawn on again")
+# what is painted on screen is the blend of the layers
+doc.new(300, 200)
+doc.image.fill(QColor(250, 240, 200))
+doc.add_layer()
+p = QPainter(doc.image)
+p.fillRect(40, 30, 120, 90, QColor(200, 30, 30))
+p.end()
+doc.set_layer_props(1, opacity=0.6)
+doc.add_layer()
+p = QPainter(doc.image)
+p.fillRect(100, 60, 120, 90, QColor(20, 60, 220, 150))
+p.end()
+doc.set_active(1)
+doc.changed.emit()
+c.set_zoom(1.0)
+app.processEvents()
+shot = vpw.grab().toImage().convertToFormat(QImage.Format_RGB32)
+want = c.display_image()
+o5 = c.origin()
+worst = 0
+for x5, y5 in ((10, 10), (60, 50), (120, 80), (200, 130), (150, 100), (290, 190)):
+    a5, b5 = QColor(shot.pixel(o5.x() + x5, o5.y() + y5)), QColor(want.pixel(x5, y5))
+    worst = max(worst, abs(a5.red() - b5.red()), abs(a5.green() - b5.green()), abs(a5.blue() - b5.blue()))
+ok(worst <= 2 and QColor(want.pixel(120, 80)).name() not in (WHITE, "#faf0c8"), "the screen shows the layers blended")
+# renaming from the pane first lands a moved selection on its own layer
+doc.new(200, 150)
+doc.add_layer()
+p = QPainter(doc.image)
+p.fillRect(20, 20, 40, 40, QColor(0, 0, 0))
+p.end()
+doc.changed.emit()
+st.set_tool("select")
+st.set_sel_mode("rect")
+drag([(10, 10), (70, 70)])
+drag([(40, 40), (80, 60), (120, 80)])
+pane.rename(0)
+pane._close_editor()
+ok(doc.active == 0 and (doc.layers[1].image.pixel(120, 80) >> 24) == 255 and px(120, 80) == WHITE,
+   "renaming another layer drops a moved selection on its own layer first")
+# desktop background: the file name reaches the desktop's tool whole, whatever characters it has
+import stat as _stat  # noqa: E402
+fake = tempfile.mkdtemp()
+logf = os.path.join(fake, "log.txt")
+with open(os.path.join(fake, "gsettings"), "w") as f:
+    f.write('#!/bin/sh\nfor a in "$@"; do printf "%s\\n" "$a" >> "' + logf + '"; done\n')
+os.chmod(os.path.join(fake, "gsettings"), 0o755)
+odd = os.path.join(tempfile.mkdtemp(), "it's a $(touch x) picture.png")
+_old_export, _old_path, _old_desk = win._export_copy, os.environ.get("PATH", ""), os.environ.get("XDG_CURRENT_DESKTOP")
+win._export_copy = lambda name: odd
+os.environ["PATH"] = fake + os.pathsep + _old_path
+os.environ["XDG_CURRENT_DESKTOP"] = "GNOME"
+_told.clear()
+win.set_wallpaper("fill")
+os.environ["PATH"] = _old_path
+if _old_desk is None:
+    del os.environ["XDG_CURRENT_DESKTOP"]
+else:
+    os.environ["XDG_CURRENT_DESKTOP"] = _old_desk
+win._export_copy = _old_export
+logged = open(logf).read().splitlines() if os.path.exists(logf) else []
+from PySide6.QtCore import QUrl  # noqa: E402
+ok(not _told and QUrl.fromLocalFile(odd).toString() in logged and "zoom" in logged and not os.path.exists("x"),
+   "the desktop background command gets an awkward file name intact")
+# Image Properties on a layered picture shows the background's own setting (it used to show the
+# selected layer's, and OK then made the background see-through)
+from opendraw7.dialogs import PropertiesDialog  # noqa: E402
+doc.new(200, 150)
+doc.add_layer()
+dlg5 = PropertiesDialog(doc, win)
+ok(doc.transparent and not dlg5.c_clear.isChecked() and dlg5.values()[3] is False,
+   "Image Properties shows the background as not see-through while a layer is selected")
+doc.set_transparent(dlg5.values()[3])
+ok(not doc.background_transparent and doc.layers[0].image.format() == QImage.Format_RGB32,
+   "OK in Image Properties leaves the background as it was")
+dlg5.deleteLater()
+# pictures from a scanner or camera do not pile up in the temporary folder
+from opendraw7.scanner import AcquireDialog, discard  # noqa: E402
+dlg6 = AcquireDialog(win)
+scan_dir = os.path.dirname(dlg6.out)
+with open(dlg6.out, "wb") as f:
+    f.write(b"x")
+discard(dlg6.out)
+other = os.path.join(tmp5, "acquired.png")
+discard(other)
+discard(None)
+ok(not os.path.exists(scan_dir) and os.path.isdir(tmp5), "an acquired picture's temporary folder is removed, and only that")
+dlg6.deleteLater()
+# moving or deleting an object selection leaves no pale ghost of its soft edge behind
+for layered5 in (False, True):
+    doc.new(400, 300)
+    if layered5:
+        doc.add_layer()
+    else:
+        p = QPainter(doc.image)                       # stripes that must come through untouched
+        for x5 in range(0, 400, 20):
+            p.fillRect(x5, 0, 10, 300, QColor(225, 235, 250))
+        p.end()
+    p = QPainter(doc.image)
+    p.setRenderHint(QPainter.Antialiasing, True)
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor(200, 30, 30))
+    p.drawEllipse(QPointF(100.3, 150.2), 40.5, 40.5)
+    p.end()
+    doc.changed.emit()
+    clean5 = QImage(doc.image)
+    p = QPainter(clean5)                              # the same picture without the disc
+    p.setCompositionMode(QPainter.CompositionMode_Source)
+    for x5 in range(40, 160):
+        p.fillRect(x5, 100, 1, 100, QColor(0, 0, 0, 0) if layered5 else
+                   (QColor(225, 235, 250) if (x5 // 10) % 2 == 0 else QColor(255, 255, 255)))
+    p.end()
+    st.set_tool("select")
+    st.set_sel_mode("object")
+    QTest.mouseClick(vpw, Qt.LeftButton, Qt.NoModifier, vp(100, 150))
+    app.processEvents()
+    hole5 = c.select_tool.doc_mask()
+    QTest.keyClick(c, Qt.Key_Delete)
+    left5 = (const_pixels(doc.image) != const_pixels(clean5)) & ~hole5
+    ok(hole5.sum() > 4000 and int(left5.sum()) == 0,
+       "deleting an object leaves no ghost of its edge" + (" on a layer" if layered5 else " and the stripes whole"))
+    c.undo()
+    ok((doc.image.pixel(100, 150) & 0xFFFFFF) == 0xC81E1E, "undo brings the object back")
+st.set_sel_mode("rect")
+_MB.information, _MB.warning = _orig_info, _orig_warn2
 
 doc.modified = False
 win.close()

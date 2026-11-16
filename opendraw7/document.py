@@ -1,6 +1,7 @@
 """Picture model: pixels, undo history, flood fill and file formats."""
 import os
 import struct
+import tempfile
 import time
 import numpy as np
 from PySide6.QtCore import QObject, Signal, Qt, QSize, QRect
@@ -445,8 +446,45 @@ def reduce_colors(img: QImage, fmt: str) -> QImage:
     return m.convertToFormat(QImage.Format_RGB32)
 
 
+_UMASK = os.umask(0)       # read once, at import, while nothing else is running
+os.umask(_UMASK)
+
+
+def replace_file(path, write):
+    """Save through a temporary file beside the real one and swap it in at the end, so a save that
+    fails half way (disk full, power cut) leaves the old file as it was. write(tmp_path) does the
+    writing and raises OSError if it cannot."""
+    target = os.path.realpath(path)          # a link keeps pointing at the same file
+    try:
+        fd, tmp = tempfile.mkstemp(prefix=".paint-", suffix=".tmp", dir=os.path.dirname(target) or ".")
+    except OSError:
+        write(target)                        # no new files allowed here; this one may still be writable
+        return
+    os.close(fd)
+    try:
+        write(tmp)
+        try:
+            mode = os.stat(target).st_mode & 0o7777
+        except OSError:
+            mode = 0o666 & ~_UMASK
+        os.chmod(tmp, mode)
+        os.replace(tmp, target)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _write_bytes(path, data):
+    with open(path, "wb") as f:
+        f.write(data)
+
+
 def save_image(img: QImage, path: str, fmt: str) -> None:
-    """Write img to path in the given format key; raises OSError on failure."""
+    """Write img to path in the given format key; raises OSError on failure, and then the file
+    that was there before is untouched."""
     if fmt == "ora":
         save_ora([Layer(img)], path)
         return
@@ -454,29 +492,31 @@ def save_image(img: QImage, path: str, fmt: str) -> None:
         img = flatten(img)          # these formats cannot keep see-through areas
     if fmt in ("bmp1", "bmp4", "bmp8", "bmp24"):
         data = _bmp_bytes(img, {"bmp1": 1, "bmp4": 4, "bmp8": 8, "bmp24": 24}[fmt])
-        with open(path, "wb") as f:
-            f.write(data)
+        replace_file(path, lambda tmp: _write_bytes(tmp, data))
         return
     if fmt == "gif":
-        with open(path, "wb") as f:
-            f.write(_gif_bytes(img))
+        data = _gif_bytes(img)
+        replace_file(path, lambda tmp: _write_bytes(tmp, data))
         return
     qfmt = {"jpeg": "jpeg", "tiff": "tiff", "png": "png"}[fmt]
-    w = QImageWriter(path, qfmt.encode())
-    if fmt == "jpeg":
-        w.setQuality(92)
-    elif fmt == "tiff":
-        w.setCompression(1)        # LZW
     if fmt == "png":
-        out = img
+        out = QImage(img)           # a copy: the resolution set below must not touch the picture
     elif img.hasAlphaChannel():
         out = img.convertToFormat(QImage.Format_ARGB32)
     else:
         out = img.convertToFormat(QImage.Format_RGB888)
     out.setDotsPerMeterX(3780)
     out.setDotsPerMeterY(3780)
-    if not w.write(out):
-        raise OSError(w.errorString())
+
+    def write(tmp):
+        w = QImageWriter(tmp, qfmt.encode())
+        if fmt == "jpeg":
+            w.setQuality(92)
+        elif fmt == "tiff":
+            w.setCompression(1)        # LZW
+        if not w.write(out):
+            raise OSError(w.errorString())
+    replace_file(path, write)
 
 
 def load_image(path: str) -> QImage:
@@ -665,12 +705,25 @@ class Document(QObject):
         self.modified = True
         self.historyChanged.emit()
 
+    def _undo_bytes(self):
+        """Memory the undo list really holds. A step shares every layer it did not change with the
+        steps around it and with the picture itself, so each distinct image is counted once and
+        the picture's own layers not at all."""
+        seen = {ly.image.cacheKey() for ly in self.layers}
+        total = 0
+        for st in self.undo_stack:
+            for ly in st.layers:
+                key = ly.image.cacheKey()
+                if key not in seen:
+                    seen.add(key)
+                    total += ly.image.sizeInBytes()
+        return total
+
     def _trim(self):
         while len(self.undo_stack) > MAX_UNDO:
             self.undo_stack.pop(0)
-        total = sum(s.nbytes() for s in self.undo_stack)
-        while total > UNDO_BYTES and len(self.undo_stack) > 3:
-            total -= self.undo_stack.pop(0).nbytes()
+        while len(self.undo_stack) > 3 and self._undo_bytes() > UNDO_BYTES:
+            self.undo_stack.pop(0)
 
     def drop_last_undo(self):
         """Abandon the operation started by the last push_undo()."""
@@ -996,37 +1049,50 @@ def save_ora(layers, path, merged=None):
     import zipfile
     from xml.sax.saxutils import quoteattr
     w, h = layers[0].image.width(), layers[0].image.height()
-    tmp = path + ".tmp"
-    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
-        z.writestr(zipfile.ZipInfo("mimetype"), ORA_MIME, compress_type=zipfile.ZIP_STORED)
-        entries = []
-        for i, ly in enumerate(layers):
-            src = f"data/layer{i}.png"
-            z.writestr(src, _png_bytes(ly.image))
-            entries.append(f'<layer name={quoteattr(ly.name)} src="{src}" x="0" y="0" '
-                           f'opacity="{ly.opacity:.3f}" visibility="{"visible" if ly.visible else "hidden"}"/>')
-        xml = (f'<?xml version="1.0" encoding="UTF-8"?>\n<image version="0.0.3" w="{w}" h="{h}" '
-               f'xres="96" yres="96"><stack>' + "".join(reversed(entries)) + "</stack></image>")
-        z.writestr("stack.xml", xml.encode("utf-8"))
-        if merged is None:
-            merged = blend_layers(layers)
-        z.writestr("mergedimage.png", _png_bytes(merged))
-        z.writestr("Thumbnails/thumbnail.png",
-                   _png_bytes(merged.scaled(256, 256, Qt.KeepAspectRatio, Qt.SmoothTransformation)))
-    os.replace(tmp, path)
+    stored = zipfile.ZIP_STORED            # PNG data is compressed already; squeezing it again only costs time
+
+    def write(tmp):
+        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr(zipfile.ZipInfo("mimetype"), ORA_MIME, compress_type=stored)
+            entries = []
+            for i, ly in enumerate(layers):
+                src = f"data/layer{i}.png"
+                z.writestr(src, _png_bytes(ly.image), compress_type=stored)
+                entries.append(f'<layer name={quoteattr(ly.name)} src="{src}" x="0" y="0" '
+                               f'opacity="{ly.opacity:.3f}" visibility="{"visible" if ly.visible else "hidden"}"/>')
+            xml = (f'<?xml version="1.0" encoding="UTF-8"?>\n<image version="0.0.3" w="{w}" h="{h}" '
+                   f'xres="96" yres="96"><stack>' + "".join(reversed(entries)) + "</stack></image>")
+            z.writestr("stack.xml", xml.encode("utf-8"))
+            flat = merged if merged is not None else blend_layers(layers)
+            z.writestr("mergedimage.png", _png_bytes(flat), compress_type=stored)
+            z.writestr("Thumbnails/thumbnail.png",
+                       _png_bytes(flat.scaled(256, 256, Qt.KeepAspectRatio, Qt.SmoothTransformation)),
+                       compress_type=stored)
+    replace_file(path, write)
 
 
 def load_ora(path):
-    """Layers (bottom first) from an OpenRaster file."""
+    """Layers (bottom first) from an OpenRaster file. Anything wrong with the file is an OSError."""
+    try:
+        return _read_ora(path)
+    except MemoryError:
+        raise OSError("The picture is too large to open.")
+    except OSError:
+        raise
+    except Exception as ex:        # not a zip, no stack.xml, broken XML, missing or bad numbers...
+        raise OSError(f"This is not a valid OpenRaster file ({type(ex).__name__}: {ex}).")
+
+
+def _read_ora(path):
     import zipfile
     import xml.etree.ElementTree as ET
-    try:
-        z = zipfile.ZipFile(path)
-    except (zipfile.BadZipFile, OSError) as ex:
-        raise OSError(f"This is not a valid OpenRaster file ({ex}).")
-    with z:
+    with zipfile.ZipFile(path) as z:
         root = ET.fromstring(z.read("stack.xml"))
         w, h = int(root.get("w")), int(root.get("h"))
+        if w < 1 or h < 1:
+            raise OSError("This is not a valid OpenRaster file (it has no size).")
+        if QImage(w, h, ALPHA_FMT).isNull():
+            raise OSError("The picture is too large to open.")
         out = []
 
         def walk(stack, ox=0, oy=0):
@@ -1040,6 +1106,8 @@ def load_ora(path):
                     if img.isNull():
                         continue
                     canvas = QImage(w, h, ALPHA_FMT)
+                    if canvas.isNull():
+                        raise OSError("The picture is too large to open.")
                     canvas.fill(0)
                     p = QPainter(canvas)
                     p.drawImage(x, y, img)

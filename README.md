@@ -101,6 +101,8 @@ against a running copy, so do not expect a pixel-for-pixel match.
 - **Help** text is written for OpenDraw7; the original's help is copyrighted.
 - **Copying a shaped selection** (polygon, free-form, wand, object) keeps the area around the shape
   see-through; the original fills the bounding rectangle with white.
+- **Saving is safe**: files are written beside the old one and swapped in, so a save that fails
+  (disk full) never damages the picture you had.
 - **Additions** the original does not have: polygon selection, magic wand, transparent backgrounds, fit to window,
   crash recovery, layers.
 
@@ -125,6 +127,7 @@ installs.
 ```sh
 QT_QPA_PLATFORM=offscreen python tests/smoke_test.py
 python run.py --self-test        # also works on a packaged build: ./opendraw7 --self-test
+QT_QPA_PLATFORM=offscreen python tools/fuzz.py 1 500   # random actions; UNDO_CHECK=1 also checks undo
 ```
 
 ## Layout

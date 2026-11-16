@@ -130,7 +130,11 @@ def run(app) -> int:
         h.search.setText("wand")
         h.grab()
         h.deleteLater()
-        AcquireDialog(win).deleteLater()
+        dlg = AcquireDialog(win)
+        from .scanner import discard
+        discard(dlg.out)
+        assert not os.path.exists(os.path.dirname(dlg.out))
+        dlg.deleteLater()
         saver = AutoSaver(win, interval=10 ** 9, folder=tmp)
         doc.push_undo()
         doc.changed.emit()

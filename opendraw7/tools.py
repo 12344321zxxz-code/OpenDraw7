@@ -495,7 +495,21 @@ class SelectTool(Tool):
                        r.left() - s.rect.left():r.right() + 1 - s.rect.left()]
             col = self.c.state.color2
             val = np.uint32(0) if doc.transparent else np.uint32(0xFF000000 | (col.rgb() & 0xFFFFFF))
-            pixels(doc.image)[r.top():r.bottom() + 1, r.left():r.right() + 1][m] = val
+            # the background found when the object was selected, if the picture is still that one
+            # (asked before pixels() below, which gives the picture a new cache key)
+            key = (doc.image.cacheKey(), doc.width(), doc.height())
+            bg = self._bg_cache if s.soft is not None and getattr(self, "_bg_key", None) == key else None
+            px = pixels(doc.image)
+            px[r.top():r.bottom() + 1, r.left():r.right() + 1][m] = val
+            if bg is not None:
+                # an object selection: also take the pale ghost of its soft edge off the background
+                from .objectselect import clean_rim, RIM
+                big = r.adjusted(-RIM - 3, -RIM - 3, RIM + 3, RIM + 3).intersected(doc.rect())
+                local = np.zeros((big.height(), big.width()), dtype=bool)
+                local[r.top() - big.top():r.top() - big.top() + r.height(),
+                      r.left() - big.left():r.left() - big.left() + r.width()] = m
+                win = (slice(big.top(), big.bottom() + 1), slice(big.left(), big.right() + 1))
+                clean_rim(px[win], local, bg[win])
             return
         p = QPainter(doc.image)
         p.translate(s.rect.topLeft())
@@ -1348,10 +1362,7 @@ class ShapeTool(ShapeBase):
             return pt
         dx, dy = pt.x() - self.p0.x(), pt.y() - self.p0.y()
         if self.kind == "line":
-            ang = round(math.atan2(dy, dx) / (math.pi / 4)) * (math.pi / 4)
-            ln = max(abs(dx), abs(dy))
-            return QPoint(self.p0.x() + int(round(math.cos(ang) * ln)) if abs(math.cos(ang)) > 0.01 else self.p0.x(),
-                          self.p0.y() + int(round(math.sin(ang) * ln)) if abs(math.sin(ang)) > 0.01 else self.p0.y())
+            return snap45(self.p0, pt)     # the end stays beside the mouse, on the nearest 45-degree line
         m = max(abs(dx), abs(dy))
         return QPoint(self.p0.x() + int(math.copysign(m, dx if dx else 1)),
                       self.p0.y() + int(math.copysign(m, dy if dy else 1)))
@@ -1703,12 +1714,14 @@ class TextTool(Tool):
     def _create(self, rect: QRect):
         self.tdoc = QTextDocument()
         self.tdoc.setDocumentMargin(self.PAD)
-        # Measure text against a small image of the picture's resolution, never the picture itself:
-        # the layout can take the paint device down with it when the text box closes.
-        img = self.c.doc.image
+        # Measure text against a small image of our own, never the picture itself: the layout can
+        # take the paint device down with it when the text box closes.
+        # It is always 96 DPI, like everything else here (Image Properties, printing, saving): going by
+        # the opened file's own DPI made the same font size come out three times larger on a 300 DPI
+        # photo than on a layer added to it, and change again after saving.
         self._device = QImage(1, 1, QImage.Format_RGB32)
-        self._device.setDotsPerMeterX(img.dotsPerMeterX())
-        self._device.setDotsPerMeterY(img.dotsPerMeterY())
+        self._device.setDotsPerMeterX(3780)
+        self._device.setDotsPerMeterY(3780)
         self.tdoc.documentLayout().setPaintDevice(self._device)
         opt = QTextOption()
         opt.setWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)

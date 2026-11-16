@@ -65,6 +65,29 @@ packaged build and refuses to archive a build that fails.
   Ctrl+Z takes back a corner instead of undoing the picture. The Polygon *shape* (`PolygonTool`)
   shares `snap45()` (Shift) and has the same follow-the-mouse side and Backspace; its Ctrl+Z still
   removes the whole shape, like every shape.
+- Painting (`Canvas._planes`/`_paint`): a layered picture is drawn straight to the screen as up to
+  three images - the blend of the layers below the active one, the active layer with the tool's work
+  in progress, the blend of the layers above (`_groups()` keeps the two blends until one of their
+  layers changes). So a stroke costs what is visible, not the whole picture (12 megapixels, three
+  layers: 25 ms a mouse move before, 2 ms after). `display_image()` still builds the one blended
+  image for the colour picker, the thumbnail window and tests; because it groups the layers this
+  way its pixels can differ by 1/255 from `doc.flattened()` (what gets saved) and from itself with
+  another layer active. That is rounding, not a file problem: files round-trip exactly.
+- Saving (`document.replace_file`): every format is written to a temporary file beside the target
+  and swapped in, so a failed save leaves the old file; links and permissions are kept. `_write` in
+  `mainwindow.py` asks once per file before saving a layered picture to a format that merges layers.
+- Undo memory (`Document._undo_bytes`): snapshots share unchanged layers (copy-on-write), so each
+  distinct image is counted once by `cacheKey()`. Counting every layer of every step gave a
+  12-megapixel, three-layer picture 3 undo steps.
+- A hidden layer (or one at 0% opacity) refuses clicks that would start new work
+  (`Canvas._hidden_layer`); the picker, magnifier and the select tool's right-click menu still work.
+- Text is always laid out at 96 DPI (`TextTool._create`), like Image Properties, printing and saving;
+  the opened file's own DPI used to change the text size per layer and after saving.
+- Object selection, lifting: `objectselect.clean_rim()` (called from `SelectTool._erase_area` for soft
+  selections) snaps the faintly tinted background pixels within `RIM` of the lifted object to the
+  closest clean background colour nearby, so no ghost of the outline stays. Bounded to `BG_NEAR`,
+  skipped on photos. `tools/objsel/rimcheck.py` lifts every object of the bench scenes and counts
+  changed pure-background pixels and cleaned faint-rim pixels per background kind.
 - Clipboard: `SelectTool.copy()` always builds the piece with alpha (`content(None)`), so the area
   outside a shaped selection is see-through on paste, even from the opaque bottom layer; a piece
   with no see-through pixel goes out as plain `RGB32`. (The original fills the rectangle with white;
@@ -130,10 +153,20 @@ packaged build and refuses to archive a build that fails.
 - Key tips must not fire after Alt+Shift (keyboard layout switching on many desktops, and the
   desktop may swallow the Shift events): Alt arms only without other modifiers, and its release
   shows tips only if no other modifier is still down.
-- A randomized stress test helps: random tool/mouse/key/menu actions on the real window, with
+- `QColor(img.pixel(x, y))` drops the alpha (a clear pixel reads as opaque black); use
+  `img.pixelColor()`. The colour picker picked black from see-through areas because of this.
+- `numpy` views from `const_pixels(img)` die with the image: keep the `QImage` in a variable for as
+  long as the array is used, or the test compares freed memory.
+- Do not ask the clipboard anything in `refresh()`: on X11 that is a round trip to whichever program
+  owns it, and `refresh()` runs on every state change.
+- Image Properties must read `doc.background_transparent`, not `doc.transparent` (true for any
+  selected upper layer): OK used to turn the background see-through on layered pictures.
+- A randomized stress test helps (`tools/fuzz.py`, see its docstring): random tool/mouse/key/menu actions on the real window, with
   QMenu/RMenu/QDialog/QMessageBox `exec` stubbed out (they block forever headless; patch `RMenu`
   itself, patching `QMenu` does not reach it), plus an undo check: after every action that changes
-  the picture, undo must restore the exact pixels and redo must bring them back.
+  the picture, undo must restore the exact pixels and redo must bring them back. Worth adding to
+  it: save in a random format and reopen (lossless formats must come back exact), and a check
+  that no premultiplied layer has a colour channel above its alpha.
 - The app sets `QT_QPA_PLATFORM=xcb;wayland` on Linux because the custom title bar was only tested
   on X11. Native Wayland is untested.
 

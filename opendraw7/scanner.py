@@ -211,9 +211,20 @@ class AcquireDialog(QDialog):
 
 
 def acquire(parent):
-    """Show the device chooser; returns the path of the acquired picture, or None."""
+    """Show the device chooser; returns the path of the acquired picture, or None. The caller
+    hands the path to discard() once it has read the picture."""
     dlg = AcquireDialog(parent)
     if dlg.exec() == QDialog.Accepted:
         return dlg.result_path
+    discard(dlg.out)
     return None
+
+
+def discard(path):
+    """Remove an acquired picture and the temporary folder made for it (a 600 DPI scan is large,
+    and nothing else ever cleared these out of the temporary folder)."""
+    import shutil
+    folder = os.path.dirname(path or "")
+    if os.path.basename(folder).startswith("opendraw7-") and os.path.basename(path) == "acquired.png":
+        shutil.rmtree(folder, ignore_errors=True)
 

@@ -348,7 +348,7 @@ class LayersPane(QWidget):
     # -- renaming -------------------------------------------------------------------------
     def rename(self, i):
         self._close_editor()
-        self.doc.set_active(i)
+        self.activate(i)            # settles work in progress before the active layer changes
         row = len(self.doc.layers) - 1 - i
         r = self.list.name_rect(row)
         ed = QLineEdit(self.list)

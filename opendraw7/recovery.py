@@ -176,7 +176,7 @@ def offer_restore(win, folder=None):
     from .document import load_ora
     try:
         img = load_ora(ppath) if ppath.endswith(".ora") else QImage(ppath)
-    except OSError:
+    except Exception:              # a copy cut short by the crash itself: nothing to bring back
         img = None
     if img is None or (isinstance(img, QImage) and img.isNull()):
         discard(ppath, jpath)
